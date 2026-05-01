@@ -56,6 +56,13 @@ Before you conclude your session or step:
 - **Update Learnings**: If you learned something new about how to do this task better in this specific project, use `python3 ~/.agents/skills/agentic-os/scripts/learn.py add --skill <skill> --worked "..." --didnt "..." --rule "..."` to record it.
 - **Update State**: Overwrite `.agent/state/last-run.json` with a summary of what you just did, what decisions you made, and what needs to happen next.
 - **Update Queue**: If you completed a task from `tasks.json`, mark its status as `completed`.
+- **Log External Receipts**: If you took external actions (deployments, API calls), record strict receipts or cryptographic hashes in the `external_receipts` array in `last-run.json` and the corresponding task in `tasks.json` to ensure an audit trail.
+
+### 4. Cross-Agent Memory Unification
+When you learn a critical fact about the project, the user's preferences, or system architecture, **do not rely solely on your proprietary memory system** (e.g., Claude's internal `.claude/` memory or Gemini's `save_memory` / `~/.gemini/tmp/.../MEMORY.md`). 
+Proprietary memory is siloed and invisible to other agents. You MUST record project-wide facts in shared locations so that Claude, Gemini, and Antigravity can all access them:
+- Use `.agent/learnings/` for specific skill rules or workflow learnings.
+- Modify `GEMINI.md` or `CLAUDE.md` for team-shared architectural conventions, repository rules, or broad project guidance.
 
 ---
 

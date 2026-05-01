@@ -28,6 +28,18 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "What the next agent or session should pick up and do"
+    },
+    "external_receipts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string" },
+          "receipt_hash": { "type": "string" }
+        },
+        "required": ["action", "receipt_hash"]
+      },
+      "description": "Cryptographic hashes or strict receipts for external actions (e.g. deployments, API calls) to improve traceability"
     }
   },
   "required": ["timestamp", "agent_runtime", "summary", "next_steps"]

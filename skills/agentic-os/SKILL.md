@@ -77,7 +77,13 @@ Used for operational continuity.
     "result": "Success"
   },
   "trace_id": "req-12345",
-  "decision_log": "Used standard Tailwind utility classes instead of custom CSS for faster rendering"
+  "decision_log": "Used standard Tailwind utility classes instead of custom CSS for faster rendering",
+  "external_receipts": [
+    {
+      "action": "Vercel Preview Deployment",
+      "receipt_hash": "sha256-1a2b3c..."
+    }
+  ]
 }
 ```
 

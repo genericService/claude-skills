@@ -29,7 +29,19 @@
         "assigned_skill": { "type": "string" },
         "created_at": { "type": "string", "format": "date-time" },
         "completed_at": { "type": ["string", "null"], "format": "date-time" },
-        "result": { "type": "string" }
+        "result": { "type": "string" },
+        "external_receipts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": { "type": "string" },
+              "receipt_hash": { "type": "string" }
+            },
+            "required": ["action", "receipt_hash"]
+          },
+          "description": "Cryptographic hashes or strict receipts for external actions taken to complete this task"
+        }
       },
       "required": ["id", "description", "created_at"]
     }

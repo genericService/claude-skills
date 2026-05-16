@@ -8,13 +8,14 @@ import sys
 from datetime import datetime, timedelta
 
 def run_gws(service, resource, method, params=None, body=None, fields=None):
-    cmd = ["gws", service, resource, method]
-    if params:
-        cmd.extend(["--params", json.dumps(params)])
+    cmd = ["gws", service, *resource.split("."), method]
+    merged_params = dict(params) if params else {}
+    if fields:
+        merged_params["fields"] = fields
+    if merged_params:
+        cmd.extend(["--params", json.dumps(merged_params)])
     if body:
         cmd.extend(["--json", json.dumps(body)])
-    if fields:
-        cmd.extend(["--fields", fields])
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:

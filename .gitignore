@@ -35,3 +35,4 @@ gha-creds-*.json
 
 # Firecrawl research cache
 .firecrawl/
+.secrets

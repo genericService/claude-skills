@@ -22,7 +22,7 @@ def list_accounts(client):
 def list_properties(client, account_name):
     print(f"Listing Properties for {account_name}...")
     # account_name format: 'accounts/123456789'
-    results = client.list_properties(filter=f"parent:{account_name}")
+    results = client.list_properties(request={"filter": f"parent:{account_name}"})
     for prop in results:
         print(f"Property Name: {prop.name}")
         print(f"Display Name: {prop.display_name}")

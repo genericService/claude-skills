@@ -6,6 +6,12 @@
       "what_worked": "Per-skill learnings/<skill>.json files keep memory scoped and loadable on demand, matching the file-based memory pattern that 2026 surveys (Mem0 State of AI Agent Memory, MachineLearningMastery, Spring AI AutoMemoryTools) report outperforms vector retrieval for autonomous agents.",
       "what_didnt": "No upper bound on history[] array size and no curation step. Published guidance (dev.to/kfuras 2026) recommends a hard cap around 100 lines per learnings file with a weekly review that promotes recurring observations into rules and archives the rest. Without that, learnings/ files will bloat over months and dilute signal \u2014 the agent is supposed to read the whole file each session.",
       "rule_change": "When .agent/learnings/<skill>.json grows past ~100 lines or ~20 history entries, run a curation pass: deduplicate near-identical entries, promote recurring patterns into a single canonical rule, and move stale entries to .agent/learnings/archive/<skill>-<date>.json. Schedule this as a periodic agent task rather than letting files grow unbounded."
+    },
+    {
+      "date": "2026-05-01",
+      "what_worked": "Adding the Cross-Agent Memory Unification directive to the SKILL.md directly ensures that all agents executing the skill see the requirement to sync memories.",
+      "what_didnt": "Relying on implicit shared memory understanding doesn't work when agents have proprietary, siloed memory systems like ~/.claude or ~/.gemini/tmp/MEMORY.md.",
+      "rule_change": "Agents MUST explicitly sync critical project-wide facts into shared locations like .agent/learnings/ or GEMINI.md/CLAUDE.md instead of siloed proprietary memory."
     }
   ]
 }

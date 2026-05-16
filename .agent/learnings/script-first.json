@@ -1,0 +1,11 @@
+{
+  "skill": "script-first",
+  "history": [
+    {
+      "date": "2026-04-27",
+      "what_worked": "Converting manual file-crawling tasks to Python scripts dramatically reduced latency and turn count.",
+      "what_didnt": "Instruction-heavy skills often lead to 'verification theatre' where the agent claims something is done without actually checking every surface.",
+      "rule_change": "Prefer deterministic scripts for all data-fetching, file-crawling, and structural-audit tasks. The agent should act as the judge of a script's output, not the laborer performing the crawl."
+    }
+  ]
+}

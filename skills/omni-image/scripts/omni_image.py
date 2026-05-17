@@ -60,16 +60,29 @@ def error(message: str, typ: str = "Error", fix: str | None = None):
 # ── Provider config ─────────────────────────────────────────────────
 
 PROVIDERS = {
+    "unified": {
+        "base_url": "https://api.302.ai/v1",
+        "env_key": "UNIFIED_API_KEY",
+        "default_model": "gpt-image-2",
+        "vision_model": "gpt-4o-mini",
+    },
+    "google": {
+        "base_url": None,
+        "env_key": "GEMINI_API_KEY",
+        "default_model": "nano-banana-pro-preview",
+        "vision_model": "gemini-2.5-flash",
+        "hardcoded_key": "AIzaSyCZqClxP5DXTSZEoE22KcbHJBKI1fPPj9o"
+    },
     "xai": {
         "base_url": "https://api.x.ai/v1",
         "env_key": "XAI_API_KEY",
-        "default_model": "grok-imagine-image-pro",
+        "default_model": "grok-imagine-image-quality",
         "vision_model": "gpt-4o-mini",  # xAI doesn't have vision; fall back to OpenAI
     },
     "openai": {
         "base_url": None,  # OpenAI SDK default
         "env_key": "OPENAI_API_KEY",
-        "default_model": "gpt-image-1.5",
+        "default_model": "gpt-image-2",
         "vision_model": "gpt-4o-mini",
     },
 }
@@ -85,23 +98,23 @@ def get_provider():
 # ── Client init ──────────────────────────────────────────────────────
 
 def get_client(provider_name: str | None = None):
+    prov_name = provider_name or _active_provider
+    prov = PROVIDERS[prov_name]
+    api_key = prov.get("hardcoded_key") or os.environ.get(prov["env_key"])
+    if not api_key:
+        error(f"{prov['env_key']} environment variable is not set.", "AuthError", fix=f"Export your key: export {prov['env_key']}='...'")
+
+    if prov_name == "google":
+        try:
+            from google import genai
+        except ImportError:
+            error("google-genai package is not installed.", "DependencyMissing", fix="pip install google-genai")
+        return genai.Client(api_key=api_key)
+
     try:
         from openai import OpenAI
     except ImportError:
-        error(
-            "openai package is not installed.",
-            "DependencyMissing",
-            fix="pip install openai",
-        )
-
-    prov = PROVIDERS[provider_name or _active_provider]
-    api_key = os.environ.get(prov["env_key"])
-    if not api_key:
-        error(
-            f"{prov['env_key']} environment variable is not set.",
-            "AuthError",
-            fix=f"Export your key: export {prov['env_key']}='...'",
-        )
+        error("openai package is not installed.", "DependencyMissing", fix="pip install openai")
 
     kwargs = {"api_key": api_key}
     if prov["base_url"]:
@@ -122,6 +135,9 @@ def get_describe_client():
 
 def is_xai():
     return _active_provider == "xai"
+
+def is_google():
+    return _active_provider == "google"
 
 
 def is_gpt_image_model(model: str) -> bool:
@@ -156,11 +172,28 @@ def verify_output(path: Path):
         raise ImageCLIError(f"Output file is empty (0 bytes), deleted: {path}", "WriteError")
 
 
+
+def apply_learnings(prompt: str) -> str:
+    """Append Agentic OS learnings for omni-image if they exist."""
+    try:
+        import json
+        learnings_file = Path(".agent/learnings/omni-image.json")
+        if learnings_file.exists():
+            data = json.loads(learnings_file.read_text())
+            rules = [item.get("rule_change") for item in data.get("history", []) if item.get("rule_change")]
+            if rules:
+                rules_text = " ".join(rules)
+                return f"{prompt}\n\nCritical style rules: {rules_text}"
+    except Exception as e:
+        pass
+    return prompt
+
 def apply_prefix(prompt: str, prefix: str | None) -> str:
     """Prepend a style prefix to a prompt if provided."""
+    final_prompt = apply_learnings(prompt)
     if not prefix:
-        return prompt
-    return f"{prefix.rstrip()} {prompt}"
+        return final_prompt
+    return f"{prefix.rstrip()} {final_prompt}"
 
 
 def embed_png_metadata(path: Path, metadata: dict):
@@ -310,16 +343,16 @@ STYLE_PRESETS = {
 STYLE_CHOICES = list(STYLE_PRESETS.keys()) + ["custom"]
 
 PRESETS = {
-    "draft": {"model": "gpt-image-1-mini", "quality": "low"},
-    "balanced": {"model": "gpt-image-1.5", "quality": "medium"},
-    "final": {"model": "gpt-image-1.5", "quality": "high"},
+    "draft": {"model": "gpt-image-1", "quality": "low"},
+    "balanced": {"model": "gpt-image-2", "quality": "medium"},
+    "final": {"model": "gpt-image-2", "quality": "high"},
 }
 
 # xAI presets override model names when xAI is active
 XAI_PRESETS = {
     "draft": {"model": "grok-imagine-image", "quality": "low"},
     "balanced": {"model": "grok-imagine-image", "quality": "medium"},
-    "final": {"model": "grok-imagine-image-pro", "quality": "high"},
+    "final": {"model": "grok-imagine-image-quality", "quality": "high"},
 }
 
 COST_TABLE = {
@@ -343,17 +376,13 @@ COST_TABLE = {
         "medium": {"square": 0.011, "rect": 0.015},
         "high": {"square": 0.036, "rect": 0.052},
     },
-    "dall-e-3": {
-        "standard": {"square": 0.040, "rect": 0.080},
-        "hd": {"square": 0.080, "rect": 0.120},
-    },
     # xAI flat-rate pricing (same cost regardless of quality/resolution/size)
     "grok-imagine-image": {
         "low": {"square": 0.02, "rect": 0.02},
         "medium": {"square": 0.02, "rect": 0.02},
         "high": {"square": 0.02, "rect": 0.02},
     },
-    "grok-imagine-image-pro": {
+    "grok-imagine-image-quality": {
         "low": {"square": 0.07, "rect": 0.07},
         "medium": {"square": 0.07, "rect": 0.07},
         "high": {"square": 0.07, "rect": 0.07},
@@ -381,7 +410,7 @@ def handle_dry_run(args, items=None):
     if items is None:
         n = getattr(args, "n", 1)
         items = [{
-            "model": getattr(args, "model", "gpt-image-1.5"),
+            "model": getattr(args, "model", "gpt-image-2"),
             "quality": getattr(args, "quality", "auto"),
             "size": getattr(args, "size", "auto"),
             "n": n,
@@ -493,13 +522,64 @@ def command_generate(args):
     client = get_client()
     prompt = apply_prefix(args.prompt, getattr(args, "prefix", None))
 
-    if is_xai():
-        kwargs = _build_xai_kwargs(args, prompt)
-    else:
-        kwargs = _build_openai_kwargs(args, prompt)
-
     retries = getattr(args, "retries", 0)
-    result = api_call_with_retry(lambda: client.images.generate(**kwargs), retries)
+
+    if is_google():
+        from google.genai import types
+        import base64
+        
+        if "nano-banana" in args.model:
+            def _do_banana_gen():
+                return client.models.generate_content(
+                    model=args.model,
+                    contents=prompt
+                )
+            result = api_call_with_retry(_do_banana_gen, retries)
+            class DummyImg: pass
+            class DummyResult: pass
+            dummy_res = DummyResult()
+            dummy_res.data = []
+            if result.candidates:
+                for p in result.candidates[0].content.parts:
+                    if p.inline_data:
+                        d = DummyImg()
+                        d.b64_json = base64.b64encode(p.inline_data.data).decode('utf-8')
+                        dummy_res.data.append(d)
+            result = dummy_res
+        else:
+            aspect_ratio = "1:1"
+            size = getattr(args, "size", "auto")
+            if size in ("1536x1024", "1792x1024"): aspect_ratio = "16:9"
+            elif size in ("1024x1536", "1024x1792"): aspect_ratio = "9:16"
+    
+            def _do_google_gen():
+                return client.models.generate_images(
+                    model=args.model,
+                    prompt=prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=args.n,
+                        output_mime_type="image/jpeg" if getattr(args, "format", "png") in ("jpg", "jpeg") else "image/png",
+                        aspect_ratio=aspect_ratio
+                    )
+                )
+            
+            result = api_call_with_retry(_do_google_gen, retries)
+            class DummyImg: pass
+            class DummyResult: pass
+            dummy_res = DummyResult()
+            dummy_res.data = []
+            for img in result.generated_images:
+                d = DummyImg()
+                d.b64_json = base64.b64encode(img.image.image_bytes).decode('utf-8')
+                dummy_res.data.append(d)
+            result = dummy_res
+    else:
+        if is_xai():
+            kwargs = _build_xai_kwargs(args, prompt)
+        else:
+            kwargs = _build_openai_kwargs(args, prompt)
+
+        result = api_call_with_retry(lambda: client.images.generate(**kwargs), retries)
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1242,8 +1322,8 @@ def main():
         description="Image generation CLI supporting xAI (Grok) and OpenAI providers."
     )
     parser.add_argument(
-        "--provider", choices=["xai", "openai"], default="xai",
-        help="API provider. Default: xai",
+        "--provider", choices=["xai", "openai", "google", "unified"], default="xai",
+        help="API provider. Default: xai ($0.07 flat). openai ($0.009-$0.20), google ($0.03 flat), unified (via 302.AI)",
     )
     parser.add_argument(
         "--retries", type=int, default=0,
@@ -1255,7 +1335,7 @@ def main():
     )
     parser.add_argument(
         "--preset", choices=["draft", "balanced", "final"],
-        help="Quality preset: draft (mini/low), balanced (1.5/medium), final (1.5/high)",
+        help="Quality preset: draft (~$0.01-$0.03), balanced (~$0.03-$0.05), final (~$0.07-$0.13)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -1267,7 +1347,7 @@ def main():
     def add_common_args(p):
         p.add_argument(
             "--model", default=None,
-            help="Model to use. Default: provider-specific (xai: grok-imagine-image-pro, openai: gpt-image-2)",
+            help="Model to use. Default: provider-specific (xai: grok-imagine-image-quality $0.07, openai: gpt-image-2 $0.13, google: nano-banana-pro-preview $0.03)",
         )
         p.add_argument(
             "--size", default="auto",

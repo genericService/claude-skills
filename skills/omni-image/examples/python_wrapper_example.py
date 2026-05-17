@@ -30,7 +30,7 @@ for p in prompts:
         "omni-image",
         "generate",
         p["prompt"],
-        "--model", "grok-imagine-image-pro",
+        "--model", "grok-imagine-image-quality",
         "--size", "1024x1536",
         "-o", f"/home/matthias/github/viajes-matthiasgoodman-com/public/images/posters/{p['name']}"
     ]

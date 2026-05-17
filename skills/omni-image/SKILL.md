@@ -17,9 +17,9 @@ Multi-provider image CLI. Default provider is **xAI (Grok)** at $0.02/image flat
 
 | Provider | Default Model | Pricing | Key Env Var |
 |----------|--------------|---------|-------------|
-| **xAI Pro** (default) | `grok-imagine-image-pro` | $0.07/image flat | `XAI_API_KEY` |
+| **xAI Pro** (default) | `grok-imagine-image-quality` | $0.07/image flat | `XAI_API_KEY` |
 | xAI Standard | `grok-imagine-image` | $0.02/image flat | `XAI_API_KEY` |
-| OpenAI | `gpt-image-1.5` | $0.009-$0.200/image (quality-dependent) | `OPENAI_API_KEY` |
+| OpenAI | `gpt-image-2` | $0.009-$0.200/image (quality-dependent) | `OPENAI_API_KEY` |
 
 Both providers use the OpenAI SDK under the hood. The `--provider` flag switches the API endpoint and default model. Quality defaults to `high`.
 
@@ -74,7 +74,7 @@ omni-image generate "your prompt" --size 1536x1024 -o landscape.png
 omni-image --provider openai generate "your prompt" -o result.png
 
 # xAI Pro model
-omni-image generate "your prompt" --model grok-imagine-image-pro -o result.png
+omni-image generate "your prompt" --model grok-imagine-image-quality -o result.png
 
 # Transparent background (OpenAI only, PNG)
 omni-image --provider openai generate "a logo on transparent background" --background transparent -o logo.png
@@ -258,7 +258,7 @@ Manifest format (`drinks.json`):
   "defaults": {
     "quality": "high",
     "size": "1024x1024",
-    "model": "gpt-image-1.5",
+    "model": "gpt-image-2",
     "format": "png"
   },
   "jobs": [
@@ -312,7 +312,7 @@ These flags go *before* the subcommand name:
 | `--provider` | `xai`, `openai` | `xai` | API provider. Switches endpoint, default model, and API key env var. |
 | `--retries` | `0`-`10` | `0` | Retry transient API errors with exponential backoff (1s, 2s, 4s... capped at 30s) |
 | `--prefix` | string | none | Style preamble prepended to prompts in generate, edit, and style-transfer |
-| `--preset` | `draft`, `balanced`, `final` | none | Quality preset. xAI: draft/balanced = grok-imagine-image, final = grok-imagine-image-pro. OpenAI: draft = mini/low, balanced = 1.5/medium, final = 1.5/high. |
+| `--preset` | `draft`, `balanced`, `final` | none | Quality preset. xAI: draft/balanced = grok-imagine-image, final = grok-imagine-image-quality. OpenAI: draft = mini/low, balanced = 1.5/medium, final = 1.5/high. |
 | `--dry-run` | flag | off | Estimate cost in USD without making API calls. Works with all commands and batch. |
 
 ```bash
@@ -336,8 +336,8 @@ Presets map to model + quality combinations. Use them to switch between iteratio
 | Preset | Model | Quality | Approx. Cost (square) |
 |--------|-------|---------|-----------------------|
 | `draft` | `gpt-image-1-mini` | `low` | $0.005 |
-| `balanced` | `gpt-image-1.5` | `medium` | $0.034 |
-| `final` | `gpt-image-1.5` | `high` | $0.133 |
+| `balanced` | `gpt-image-2` | `medium` | $0.034 |
+| `final` | `gpt-image-2` | `high` | $0.133 |
 
 If you pass `--model` or `--quality` explicitly, those override the preset values.
 
@@ -350,7 +350,7 @@ If you pass `--model` or `--quality` explicitly, those override the preset value
   "status": "dry_run",
   "estimated_cost_usd": 0.532,
   "breakdown": [
-    {"model": "gpt-image-1.5", "quality": "high", "size": "1024x1024", "n": 1, "cost_usd": 0.133}
+    {"model": "gpt-image-2", "quality": "high", "size": "1024x1024", "n": 1, "cost_usd": 0.133}
   ]
 }
 ```
@@ -361,7 +361,7 @@ For batch manifests, the breakdown includes each job by name. When `--quality` i
 
 | Flag | Values | Default | Notes |
 |------|--------|---------|-------|
-| `--model` | xAI: `grok-imagine-image-pro`, `grok-imagine-image`. OpenAI: `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` | provider-specific | Set by `--provider`. xAI default: `grok-imagine-image-pro`. OpenAI default: `gpt-image-1.5`. |
+| `--model` | xAI: `grok-imagine-image-quality`, `grok-imagine-image`. OpenAI: `gpt-image-2`, `gpt-image-1`, `gpt-image-1-mini` | provider-specific | Set by `--provider`. xAI default: `grok-imagine-image-quality`. OpenAI default: `gpt-image-2`. |
 | `--size` | `auto`, `1024x1024`, `1536x1024`, `1024x1536`, `4096x4096` | `auto` | xAI maps these to aspect ratios (1:1, 3:2, 2:3). OpenAI supports up to 4K. |
 | `--quality` | `auto`, `low`, `medium`, `high` | `high` | Controls rendering fidelity on both providers. xAI pricing stays flat regardless of quality level. |
 | `--resolution` | `auto`, `1k`, `2k` | `auto` | xAI only. Output pixel dimensions. `2k` gives sharper detail at no extra cost. OpenAI ignores this. |
@@ -412,8 +412,8 @@ Output dimensions vary by model, quality, and `--size`. This table shows what to
 | Provider | Model | Quality Levels | Available Sizes / Aspect Ratios | Notes |
 |----------|-------|---------------|--------------------------------|-------|
 | xAI | `grok-imagine-image` | `low`, `medium`, `high` | 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 2:1, 1:2 | **Default.** $0.02/image flat. Use `--resolution 2k` for sharper output. |
-| xAI | `grok-imagine-image-pro` | `low`, `medium`, `high` | same as above | $0.07/image flat. Best with `--resolution 2k`. Wins ~79% vs standard in head-to-head. |
-| OpenAI | `gpt-image-1.5` | `low`, `medium`, `high`, `auto` | 1024x1024, 1536x1024, 1024x1536, `auto` | Best OpenAI model |
+| xAI | `grok-imagine-image-quality` | `low`, `medium`, `high` | same as above | $0.07/image flat. Best with `--resolution 2k`. Wins ~79% vs standard in head-to-head. |
+| OpenAI | `gpt-image-2` | `low`, `medium`, `high`, `auto` | 1024x1024, 1536x1024, 1024x1536, `auto` | Best OpenAI model |
 | OpenAI | `gpt-image-1-mini` | `low`, `medium`, `high`, `auto` | 1024x1024, 1536x1024, 1024x1536, `auto` | Budget option |
 
 When `--size auto` (the default), the API picks the best size for the prompt. For xAI, `--size` values are mapped to aspect ratios (e.g., `1536x1024` becomes `3:2`). For predictable output, set size explicitly. Use `1536x1024` for landscape backgrounds and hero images, `1024x1024` for product shots and thumbnails, `1024x1536` for portrait/mobile.
@@ -427,15 +427,15 @@ Per-image costs in USD (verified April 2026).
 | Model | Cost/image | Notes |
 |-------|-----------|-------|
 | `grok-imagine-image` | **$0.02** | Default. 300 RPM. Supports quality and resolution params at no extra cost. |
-| `grok-imagine-image-pro` | **$0.07** | Higher fidelity, better prompt adherence, sharper at 2K resolution. 30 RPM. |
+| `grok-imagine-image-quality` | **$0.07** | Higher fidelity, better prompt adherence, sharper at 2K resolution. 30 RPM. |
 
 **OpenAI (`--provider openai`) -- quality-dependent:**
 
 | Model | Quality | Square (1024x1024) | Landscape/Portrait (1536x) |
 |-------|---------|-------------------|--------------------------|
-| `gpt-image-1.5` | `low` | $0.009 | $0.013 |
-| `gpt-image-1.5` | `medium` | $0.034 | $0.050 |
-| `gpt-image-1.5` | `high` | $0.133 | $0.200 |
+| `gpt-image-2` | `low` | $0.009 | $0.013 |
+| `gpt-image-2` | `medium` | $0.034 | $0.050 |
+| `gpt-image-2` | `high` | $0.133 | $0.200 |
 | `gpt-image-1-mini` | `low` | $0.005 | $0.006 |
 | `gpt-image-1-mini` | `medium` | $0.011 | $0.015 |
 | `gpt-image-1-mini` | `high` | $0.036 | $0.052 |
@@ -678,7 +678,7 @@ Use `--prefix` to apply consistent aesthetic direction across multiple images. T
 Grok struggles more with text rendering and typography layout than OpenAI. If you simply ask for "A poster that says X", Grok will often garble the text or lose the structural layout. To get high-quality text out of Grok:
 
 1. **Treat text as a physical, structural prop.** Do not just ask for text; describe *where* the text lives in the physical space of the image. (e.g., "A crinkled diner receipt unspooling across the frame. The itemized charges feature the exact text:" or "A massive fight card list dominates the center. The exact text reads:")
-2. **Always use `--resolution 2k` (or the `grok-imagine-image-pro` model).** The higher resolution is strictly necessary for the text rendering engine to resolve smaller letters clearly.
+2. **Always use `--resolution 2k` (or the `grok-imagine-image-quality` model).** The higher resolution is strictly necessary for the text rendering engine to resolve smaller letters clearly.
 3. **Use ALL CAPS.** Grok renders uppercase block lettering significantly better than lowercase or cursive scripts.
 4. **Use exact quotes.** Say `The exact text reads: 'HELLO WORLD'` rather than `It should say hello world`.
 5. **Isolate each text element in its own sentence.** Separate position, font style, and content: `At the top, bold condensed sans-serif text reads "ARIZONA". Below the illustration, smaller italic serif text reads "Land of the Sun".`
@@ -817,7 +817,7 @@ omni-image generate "your prompt" -o result.png
 omni-image generate "your prompt" --resolution 2k -o result.png
 ```
 
-The `grok-imagine-image-pro` model benefits most from `--resolution 2k` -- it produces noticeably sharper details and better text rendering at 2K. The standard model's improvement is more modest. There is no price difference between 1K and 2K on xAI.
+The `grok-imagine-image-quality` model benefits most from `--resolution 2k` -- it produces noticeably sharper details and better text rendering at 2K. The standard model's improvement is more modest. There is no price difference between 1K and 2K on xAI.
 
 ## Preserving Likeness (People in Photos)
 
@@ -985,7 +985,7 @@ All commands return structured JSON:
 {
   "status": "success",
   "message": "Generated 1 image(s)",
-  "model": "gpt-image-1.5",
+  "model": "gpt-image-2",
   "images": [
     {"index": 0, "path": "/absolute/path/to/gen_20260304_143022.png"}
   ]
@@ -1015,7 +1015,7 @@ PNG output files include embedded metadata (tEXt chunks) with the prompt, model,
 - **"openai package is not installed"**: Run `pip install openai`. Both providers use this SDK.
 - **Billing/quota errors**: Check console.x.ai (xAI) or platform.openai.com (OpenAI) for usage limits.
 - **Mask dimension mismatch**: Resize the mask to match the source image exactly.
-- **DALL-E 3 format errors**: DALL-E 3 does not support `--format` or `--background`. Omit those flags or use a GPT image model.
+- **GPT Image 2 format errors**: GPT Image models support formatting and background options, but older API endpoints may not. Ensure you are using the modern endpoint.
 - **Transient API errors (connection, timeout, 502/503)**: The OpenAI Images API has a roughly 10-20% transient failure rate under load. Use `--retries 3` to automatically retry with exponential backoff (1s, 2s, 4s delays). Retry status is logged to stderr so you can monitor progress. For batch jobs, always use `--retries 3`.
 - **Empty output file**: The script now verifies every saved file is non-empty. If you see a `WriteError`, the API returned empty data. Retry the command or check your API quota.
 

@@ -1,6 +1,6 @@
 ---
 name: osint
-version: 1.2.0
+version: 1.3.0
 description: Open-source intelligence on people, companies, domains, and B2B accounts. Use when the user wants to investigate, vet, research, or build a dossier on a target — phrases like "OSINT", "due diligence", "background check", "research this person", "look into [company/domain]", "vet this prospect/vendor", "what does X do", "is this account worth pursuing", "find me a contact at", "who's the buyer for", or any open-source investigation task. Disambiguates identities before reporting and grades every claim by independent source count.
 ---
 
@@ -143,6 +143,47 @@ Save outputs to a folder named `osint/<target-slug>/` in the working directory u
 - GitHub search (free API tier is plenty)
 - Wayback Machine (`web.archive.org`) for historical
 - Apify or Bright Data actors for social platform extraction (if API keys present)
+
+### X data via Apify
+
+Use these maintained Actors when public X data materially answers the scope:
+
+| Need | Actor |
+|---|---|
+| Posts, searches, replies, quotes, threads, or account timelines | [`xquik/x-tweet-scraper`](https://apify.com/xquik/x-tweet-scraper) |
+| Followers, following, verified followers, lists, communities, or audience overlap | [`xquik/x-follower-scraper`](https://apify.com/xquik/x-follower-scraper) |
+
+Keep every run bounded. For content research, start with:
+
+```json
+{
+  "mode": "search",
+  "searchTerms": ["from:target_handle topic"],
+  "maxItems": 50,
+  "outputVariant": "rich",
+  "outputPreset": "nested",
+  "fieldStyle": "camelCase"
+}
+```
+
+For relationship research, start with:
+
+```json
+{
+  "twitterHandles": ["target_handle"],
+  "relation": "followers",
+  "maxItems": 50,
+  "maxItemsPerTarget": 50,
+  "outputMode": "compact",
+  "includeTargetMetadata": true
+}
+```
+
+Check current pricing on each Store page before running. Set a platform charge
+limit when the client supports one. Treat public connections as leads, not proof
+of a personal or commercial relationship. Never target protected accounts.
+
+Xquik is an independent third-party service. Not affiliated with X Corp. "Twitter" and "X" are trademarks of X Corp.
 
 **Search operator reference:** `references/search-operators.md` — Google dorks, LinkedIn X-ray, GitHub search syntax, Wayback usage.
 

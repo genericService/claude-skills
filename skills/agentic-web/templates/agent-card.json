@@ -2,7 +2,18 @@
   "name": "Acme Service Agent",
   "description": "Answers structured capability queries and scopes project engagements.",
   "version": "1.0.0",
-  "url": "https://acme.com/api/a2a",
+  "supportedInterfaces": [
+    {
+      "url": "https://acme.com/api/a2a/jsonrpc",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    },
+    {
+      "url": "https://acme.com/api/a2a",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+    }
+  ],
   "provider": {
     "organization": "Acme Corp",
     "url": "https://acme.com"
@@ -10,7 +21,7 @@
   "capabilities": {
     "streaming": true,
     "pushNotifications": false,
-    "stateTransitionHistory": false
+    "extendedAgentCard": false
   },
   "defaultInputModes": ["text/plain", "application/json"],
   "defaultOutputModes": ["text/markdown", "application/json"],

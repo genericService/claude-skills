@@ -1,0 +1,10 @@
+{
+  "specVersion": "1.0",
+  "entries": [
+    {
+      "identifier": "urn:air:mcp:acme-ops",
+      "type": "application/mcp-server-card+json",
+      "url": "https://acme.com/api/mcp/server-card"
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
-  "name": "acme-mcp",
-  "title": "Acme MCP Server",
-  "description": "Public read-only tools and structured documentation resources.",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+  "name": "com.acme/ops-server",
+  "title": "Acme Operations MCP Server",
+  "description": "Public read-only service catalog, pricing estimator, and documentation tools.",
   "version": "1.0.0",
   "websiteUrl": "https://acme.com",
   "remotes": [

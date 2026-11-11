@@ -1,70 +1,155 @@
-# RFC 8615 Well-Known URIs & Agent/API Discovery Stack
+# RFC 8615 Well-Known URIs, MCP v2, A2A v1.0 & Auth Discovery
 
-Technical implementation reference for **IETF RFC 8615** (`/.well-known/`), MCP Server Cards (**SEP-2127**), A2A Agent Cards, **RFC 9727** API Catalogs, **RFC 9728 / RFC 8414** OAuth Discovery, and **RFC 9116** `security.txt`.
-
----
-
-## 1. RFC 8615 Core Protocol Rules
-
-**RFC 8615** (*Well-Known Uniform Resource Identifiers*, updating RFC 5785) reserves the path prefix `/.well-known/` at the origin root (`https://<host>:<port>/.well-known/<registered-suffix>`) for origin-wide policy and discovery metadata.
-
-### Mandatory Engineering Invariants
-1. **Origin-Root Placement**: Well-known URIs live at the origin root (`/.well-known/...`), NOT inside arbitrary subpaths, except where a downstream specification explicitly defines path-appended metadata (for example, RFC 9728 `/.well-known/oauth-protected-resource/<resource-path>` or RFC 8414 issuer paths). For subpath-only sites (such as GitHub Pages project repos), rely on subpath `/<subpath>/llms.txt` instead of unreachable `/.well-known/` files.
-2. **HTTPS & Exact Media Types**:
-   - Serve over HTTPS (`200 OK`) without login walls or HTML soft-404 wrappers.
-   - Return exact `Content-Type` headers:
-     - JSON manifests (`brand.json`, `adagents.json`, `mcp.json`, `agent-card.json`, `jwks.json`, `apple-app-site-association`, `assetlinks.json`): `application/json; charset=utf-8`
-     - `/.well-known/api-catalog`: `application/linkset+json` (RFC 9264)
-     - `/.well-known/security.txt` & `/.well-known/adcp-ownership.txt`: `text/plain; charset=utf-8`
-3. **CORS for Browser & IDE Agents**:
-   - Emit `Access-Control-Allow-Origin: *` and `Access-Control-Allow-Methods: GET, HEAD, OPTIONS` on all public `/.well-known/*` discovery endpoints so browser-based agents, MCP inspectors, and web validators can read them cross-origin.
-4. **Zero Secrets in Public Discovery Files**:
-   - Never place API keys, bearer tokens, internal private hostnames, or customer PII in any `/.well-known/` document. Delegate authentication dynamically via `/.well-known/oauth-protected-resource` (RFC 9728).
-5. **Framework Routing & Canonical `www` Redirect Trap Prevention**:
-   - Next.js (`proxy.ts` / `middleware.ts`, `[locale]`, `[[...slug]]`), TinaCMS, Astro, and SPA fallback rules (`/* /index.html 200`) frequently hijack `/.well-known/*` and return HTML `200 OK`, breaking JSON parsers silently. Always exclude `/.well-known/` from SPA rewrites and auth/locale middleware, and verify responses with `curl -i`.
-   - **Apex vs `www` Canonical Redirects**: AdCP registry resolvers query bare DNS hostnames (`https://example.com/.well-known/brand.json` and `adagents.json`). If your CDN redirects bare apex `example.com` -> `www.example.com` (`301`/`308`), configure your Cloudflare Redirect Rule (`not starts_with(http.request.uri.path, "/.well-known/") and http.request.uri.path ne "/llms.txt"`) or edge worker so `/.well-known/*` and `/llms.txt` resolve with `200 OK` directly on the bare apex OR ensure the redirect preserves the exact path cleanly to a `200 OK` JSON endpoint without Cloudflare bot-challenge HTML interstitials.
+Primary-source implementation reference for **IETF RFC 8615** (`/.well-known/`), **RFC 8288** (Web Linking), **MCP `2026-07-28` & SEP-2127 Server Cards**, **A2A `v1.0.1` Agent Cards**, **RFC 9727** (`api-catalog`), **RFC 9728** (`oauth-protected-resource`), and **RFC 9116** (`security.txt`).
 
 ---
 
-## 2. MCP Server Discovery: `/.well-known/mcp.json` (SEP-2127)
+## 1. RFC 8615 Core Protocol Invariants
 
-Expose `/.well-known/mcp.json` (and optionally `/.well-known/mcp/server-card.json`) ONLY when the domain operates a real remote HTTP Model Context Protocol server (`streamable-http` or `sse`). Do not publish stub `mcp.json` files pointing to non-existent `/mcp` routes.
+**RFC 8615** (*Well-Known Uniform Resource Identifiers*, obsoleting RFC 5785) reserves `/.well-known/<segment-nz>` at the origin root (`scheme + host + port`).
 
-### Schema (`https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json`)
+1. **Origin-Root Scope & Subdomain Isolation**:
+   - Well-known URIs apply strictly to a single HTTP origin (`https://sub.example.com/.well-known/...` never inherits from `https://example.com/.well-known/...`).
+   - Do NOT place `/.well-known/` inside arbitrary subdirectories (`/app/.well-known/...` is non-conformant), except where a downstream RFC explicitly defines **path insertion** after `/.well-known/<suffix>` (specifically **RFC 9728** and **RFC 8414**).
+2. **Exact Media Types & Sniffing Protection**:
+   - Serve over `https` (`200 OK`) with `X-Content-Type-Options: nosniff` and `Access-Control-Allow-Origin: *`.
+   - Use each specification's registered media type:
+     - `/.well-known/ai-catalog.json`: `application/ai-catalog+json`
+     - `<mcp-url>/server-card`: `application/mcp-server-card+json`
+     - `/.well-known/agent-card.json`: `application/a2a+json` (or `application/json`) + `A2A-Version: 1.0`
+     - `/.well-known/api-catalog`: `application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"`
+     - `/.well-known/brand.json`, `adagents.json`, `oauth-protected-resource`, `jwks.json`, `ucp`, `acp.json`, `tdmrep.json`: `application/json; charset=utf-8`
+     - `/.well-known/security.txt`, `adcp-ownership.txt`: `text/plain; charset=utf-8`
+3. **Middleware, SPA Fallback & Bare-Apex Redirect Protection**:
+   - Exclude `/.well-known/` from Next.js `proxy.ts` / `middleware.ts`, locale prefixes, auth login redirects, and SPA `/* -> /index.html 200` rewrites. Returning HTML `200 OK` on a `/.well-known/` URI breaks deterministic validators.
+   - If your CDN redirects bare apex `example.com` -> `www.example.com`, bypass the redirect for `/.well-known/*` and `/llms.txt` (`not starts_with(http.request.uri.path, "/.well-known/")`) so strict no-redirect resolvers (`adagents.json`, `ucp`) receive `200 OK` directly at the bare domain.
 
-```json
-{
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
-  "name": "acme-ops",
-  "title": "Acme Operations MCP Server",
-  "description": "Read-only service catalog, pricing estimator, and scheduling tools.",
-  "version": "1.2.0",
-  "websiteUrl": "https://acme.com",
-  "remotes": [
-    {
-      "type": "streamable-http",
-      "url": "https://acme.com/api/mcp"
-    }
-  ]
-}
+---
+
+## 2. MCP `2026-07-28`, SEP-2127 Server Cards & Official v2 SDKs
+
+Publish MCP discovery endpoints ONLY when the domain operates a real remote HTTP MCP server.
+
+### 2.1 SEP-2127 Canonical Discovery (`ai-catalog.json` + `<mcp-url>/server-card`)
+Per `modelcontextprotocol/ext-server-card` (**SEP-2127**):
+- Do **not** confuse `mcp.json` (**SEP-2633** local client configuration format) with SEP-2127 server discovery, and note that `/.well-known/mcp/server-card` was rejected during SEP-2127 review in favor of `ai-catalog.json` + `<mcp-url>/server-card`.
+- **Step 1: Domain Catalog (`GET /.well-known/ai-catalog.json`, `Content-Type: application/ai-catalog+json`)**:
+  ```json
+  {
+    "specVersion": "1.0",
+    "entries": [
+      {
+        "identifier": "urn:air:mcp:acme-ops",
+        "type": "application/mcp-server-card+json",
+        "url": "https://acme.com/api/mcp/server-card"
+      }
+    ]
+  }
+  ```
+- **Step 2: Server Card (`GET <mcp-endpoint>/server-card`, `Content-Type: application/mcp-server-card+json`)**:
+  Also advertise via `Link: <https://acme.com/api/mcp/server-card>; rel="describedby"; type="application/mcp-server-card+json"` on MCP endpoint responses.
+  ```json
+  {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+    "name": "com.acme/ops-server",
+    "title": "Acme Operations MCP Server",
+    "description": "Read-only service catalog, pricing estimator, and scheduling tools.",
+    "version": "1.2.0",
+    "websiteUrl": "https://acme.com",
+    "remotes": [
+      {
+        "type": "streamable-http",
+        "url": "https://acme.com/api/mcp"
+      }
+    ]
+  }
+  ```
+  - **Required fields (`v1/server-card.schema.json`)**:
+    - `$schema`: `"https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json"`
+    - `name`: Reverse-DNS namespace + slash + name (`^[a-zA-Z0-9.-]+/[a-zA-Z0-9._-]+$`, 3 to 200 chars, e.g. `"com.acme/ops-server"`).
+    - `description`: Plain text, **1 to 100 characters** (no Markdown formatting).
+    - `version`: Version string (`<= 255` chars).
+  - **Optional fields**: `title` (`1..100` chars), `websiteUrl`, `repository` (`{ url, source, subfolder?, id? }`), `icons`, `remotes` (`[{ type: "streamable-http" | "sse", url, headers?, variables? }]`), `_meta`.
+
+### 2.2 MCP `2026-07-28` Transport & OAuth 2.1 / CIMD Rules
+- **Stateless HTTP Transport (`2026-07-28`)**: Single HTTP `POST` endpoint (`GET`/`DELETE` return `405 Method Not Allowed`; stateful `Mcp-Session-Id` was removed in `2026-07-28`). Supports pre-session `server/discover` JSON-RPC, headers `MCP-Protocol-Version: 2026-07-28`, `Mcp-Method`, `Mcp-Name`, and Multi-Round Tool Execution (`resultType: "input_required"`).
+- **Authorization**: Requires RFC 9728 Protected Resource Metadata (`authorization_servers` >= 1), OAuth 2.1 + PKCE (`S256`), RFC 8707 `resource` audience binding, and **OAuth Client ID Metadata Documents (CIMD)** (`client_id_metadata_document_supported: true`; Dynamic Client Registration RFC 7591 is deprecated).
+
+### 2.3 Official MCP v2 SDKs
+
+#### TypeScript SDK v2 (`@modelcontextprotocol/server@2.4.0`)
+```bash
+pnpm add @modelcontextprotocol/server @modelcontextprotocol/client zod
+# Add @modelcontextprotocol/node for Node http.IncomingMessage adapters
+```
+```ts
+// Web Standard WinterTC Route Handler (Next.js App Router, Cloudflare Workers, Deno, Bun)
+import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
+import * as z from "zod/v4";
+
+const server = new McpServer({ name: "com.acme/ops-server", version: "1.2.0" });
+
+server.registerTool(
+  "estimate_scope",
+  {
+    title: "Estimate Project Scope",
+    description: "Calculates fixed-fee band from host count.",
+    inputSchema: z.object({ hosts: z.number().int().min(1) }),
+    annotations: { readOnlyHint: true },
+  },
+  async ({ hosts }) => ({
+    content: [{ type: "text", text: JSON.stringify({ hosts, bandUsd: hosts * 250 }) }],
+  }),
+);
+
+const handler = createMcpHandler(server);
+export const POST = (req: Request): Promise<Response> => handler(req);
 ```
 
-- **Required fields**: `name` (lowercase kebab-case identifier), `description`, `version` (SemVer), and `remotes` (non-empty array of `{ "type": "streamable-http", "url": "https://..." }`).
+#### Python SDK v2 (`mcp==2.3.0`)
+Note: Python SDK v2 renamed v1 `FastMCP` to `MCPServer` (`from mcp.server.mcpserver import MCPServer`).
+```bash
+uv add "mcp>=2.3.0"
+```
+```python
+from mcp.server.mcpserver import MCPServer
+
+mcp = MCPServer("com.acme/ops-server")
+
+@mcp.tool()
+def estimate_scope(hosts: int) -> dict[str, int]:
+    """Calculate fixed-fee band from host count."""
+    return {"hosts": hosts, "band_usd": hosts * 250}
+
+app = mcp.streamable_http_app(streamable_http_path="/api/mcp", stateless_http=True)
+```
 
 ---
 
-## 3. Agent-to-Agent Discovery: `/.well-known/agent-card.json` (A2A)
+## 3. A2A `v1.0.1` Agent Discovery (`/.well-known/agent-card.json`) & SDKs
 
-Expose `/.well-known/agent-card.json` (with an optional symlink or alias at `/.well-known/agent.json` for older A2A v0.1 clients) when the origin hosts an autonomous A2A protocol endpoint capable of receiving delegated tasks.
+Publish `/.well-known/agent-card.json` (`Content-Type: application/a2a+json`, header `A2A-Version: 1.0`) when hosting an autonomous Agent2Agent (`lf.a2a.v1`) endpoint.
 
-### Canonical A2A Agent Card Structure
+### 3.1 Canonical v1.0.1 `AgentCard` JSON Structure
+Key v1.0 breaking changes from v0.3: top-level `url` moved into `supportedInterfaces[]`; `capabilities.stateTransitionHistory` was removed (`extendedAgentCard` added); `security` was renamed to `securityRequirements`; `skills[].tags` is required.
 
 ```json
 {
   "name": "Acme Quote Agent",
   "description": "Scopes infrastructure assessments and returns structured project estimates.",
   "version": "1.0.0",
-  "url": "https://acme.com/api/a2a",
+  "supportedInterfaces": [
+    {
+      "url": "https://acme.com/api/a2a/jsonrpc",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    },
+    {
+      "url": "https://acme.com/api/a2a",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+    }
+  ],
   "provider": {
     "organization": "Acme Corp",
     "url": "https://acme.com"
@@ -72,7 +157,7 @@ Expose `/.well-known/agent-card.json` (with an optional symlink or alias at `/.w
   "capabilities": {
     "streaming": true,
     "pushNotifications": false,
-    "stateTransitionHistory": false
+    "extendedAgentCard": false
   },
   "defaultInputModes": ["text/plain", "application/json"],
   "defaultOutputModes": ["text/markdown", "application/json"],
@@ -88,70 +173,64 @@ Expose `/.well-known/agent-card.json` (with an optional symlink or alias at `/.w
 }
 ```
 
----
-
-## 4. API Discovery: `/.well-known/api-catalog` (RFC 9727)
-
-**RFC 9727** standardizes machine-readable API discovery at `/.well-known/api-catalog` using **RFC 9264** JSON Linksets (`Content-Type: application/linkset+json`). Emit HTTP `Link: </.well-known/api-catalog>; rel="api-catalog"` on API or root responses when public HTTP APIs exist.
-
-### Linkset Structure (`application/linkset+json`)
-
-```json
-{
-  "linkset": [
-    {
-      "anchor": "https://acme.com/api/v1",
-      "service-desc": [
-        {
-          "href": "https://acme.com/api/v1/openapi.json",
-          "type": "application/vnd.oai.openapi+json;version=3.1"
-        }
-      ],
-      "service-doc": [
-        {
-          "href": "https://acme.com/docs/api.md",
-          "type": "text/markdown"
-        }
-      ],
-      "status": [
-        {
-          "href": "https://acme.com/api/health",
-          "type": "application/json"
-        }
-      ]
-    }
-  ]
-}
-```
+### 3.2 Official A2A v1.3.0 SDKs
+- **TypeScript (`@a2a-js/sdk@1.3.0`)**:
+  ```bash
+  pnpm add @a2a-js/sdk
+  ```
+  Exports `AGENT_CARD_PATH` (`".well-known/agent-card.json"`), `DefaultRequestHandler`, `InMemoryTaskStore` (`@a2a-js/sdk/server`), Express middlewares `agentCardHandler`, `jsonRpcHandler`, `restHandler` (`@a2a-js/sdk/server/express`), and `ClientFactory` (`@a2a-js/sdk/client`).
+- **Python (`a2a-sdk==1.3.0`)**:
+  ```bash
+  uv add "a2a-sdk[http-server]>=1.3.0"
+  ```
+  Exports `AgentCard`, `AgentInterface`, `AgentSkill`, `AgentCapabilities` (`a2a.types`), `add_a2a_routes_to_fastapi` / `create_agent_card_routes` (`a2a.server.routes`), and `create_client` (`a2a.client`).
 
 ---
 
-## 5. Zero-Config Agent Auth: RFC 9728 & RFC 8414
+## 4. API Catalog Discovery: `/.well-known/api-catalog` (`RFC 9727`)
 
-When an MCP server, A2A agent, or REST API requires OAuth 2.1 tokens:
-
-1. **Protected Resource Metadata (`RFC 9728`)**: Host `/.well-known/oauth-protected-resource` (and return `WWW-Authenticate: Bearer resource_metadata="https://acme.com/.well-known/oauth-protected-resource"` on `401 Unauthorized`):
-   ```json
-   {
-     "resource": "https://acme.com/api/mcp",
-     "authorization_servers": ["https://auth.acme.com"],
-     "scopes_supported": ["mcp:tools:read", "mcp:tools:execute"],
-     "bearer_methods_supported": ["header"]
-   }
-   ```
-2. **Authorization Server Metadata (`RFC 8414`)**: Ensure each listed authorization server exposes `/.well-known/oauth-authorization-server` (or `/.well-known/openid-configuration`) with PKCE (`code_challenge_methods_supported: ["S256"]`) and optional dynamic client registration / CIMD support required by modern MCP clients.
+**RFC 9727** (June 2025) defines machine-readable API discovery at `/.well-known/api-catalog` using **RFC 9264** JSON Linksets:
+- `GET /.well-known/api-catalog` MUST return `200 OK` with `Content-Type: application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"`.
+- `HEAD /.well-known/api-catalog` MUST return `200 OK` with a `Link` header containing `rel="api-catalog"`.
+- Supported link relation keys inside `linkset[]`:
+  - `anchor` *(required)*: Base URI of the API endpoint.
+  - `service-desc`: Machine-readable specification (`OpenAPI 3.1`, `AsyncAPI`, `GraphQL SDL`).
+  - `service-doc`: Human/agent documentation (`text/markdown` or `text/html`).
+  - `service-meta`: Terms of service or SLA policies.
+  - `status`: Health check endpoint (`application/health+json` or `application/json`).
+  - `item` (for lightweight publisher-only catalogs) and nested `api-catalog`.
 
 ---
 
-## 6. Security & Platform Well-Known Hygiene
+## 5. OAuth 2.0 Protected Resource Metadata (`RFC 9728`)
 
-### 6.1 `/.well-known/security.txt` (RFC 9116)
-Every production domain SHOULD publish `/.well-known/security.txt` (`text/plain; charset=utf-8`):
+**RFC 9728** (April 2025) enables zero-config auth discovery for MCP servers, A2A agents, and HTTP APIs.
+
+### Critical Path-Insertion Rule (`RFC 9728` Section 3.1)
+Insert `/.well-known/oauth-protected-resource` **between the authority (host:port) and the resource path** (never append it to the end of a subpath!):
+
+| Protected Resource Identifier (`resource`) | Required RFC 9728 Well-Known Metadata URL |
+| :--- | :--- |
+| `https://acme.com` | `https://acme.com/.well-known/oauth-protected-resource` |
+| `https://acme.com/api/mcp` | `https://acme.com/.well-known/oauth-protected-resource/api/mcp` |
+
+- On `401 Unauthorized` or `403 Forbidden`, return:
+  ```http
+  WWW-Authenticate: Bearer resource_metadata="https://acme.com/.well-known/oauth-protected-resource/api/mcp", scope="mcp:tools:read"
+  ```
+- Validation rules:
+  - Returned JSON `"resource"` MUST match the target resource identifier **code-point-for-code-point**.
+  - Omit optional array keys instead of setting `[]` or `null` (except `"bearer_methods_supported": []`, which explicitly signals zero bearer token support such as pure mTLS/DPoP).
+
+---
+
+## 6. Vulnerability Disclosure: `/.well-known/security.txt` (`RFC 9116`)
+
+Serve `/.well-known/security.txt` as `Content-Type: text/plain; charset=utf-8`:
 - **Required fields**:
-  - `Contact:` (`mailto:security@example.com` or `https://example.com/contact`)
-  - `Expires:` (strict ISO 8601 timestamp with timezone offset, such as `2027-11-11T00:00:00.000Z`, typically 6 to 12 months in the future; expired timestamps fail automated audits!)
-- **Recommended fields**: `Canonical:` (full HTTPS URL of `/.well-known/security.txt`), `Preferred-Languages: en`, `Policy:`.
-
-### 6.2 Mobile Universal Links & App Links (When Paired with Native Apps)
-- **iOS (`/.well-known/apple-app-site-association`)**: Must be served as `Content-Type: application/json` WITHOUT a `.json` file extension and without HTTP redirects.
-- **Android (`/.well-known/assetlinks.json`)**: `Content-Type: application/json` declaring `delegate_permission/common.handle_all_urls` and SHA-256 signing certificate fingerprints.
+  - One or more `Contact:` lines (`mailto:`, `tel:`, or `https://` URI).
+  - **Exactly one** `Expires:` line formatted per `RFC 3339` (`2027-06-01T00:00:00Z`), recommended **less than 1 year** in the future. Multiple `Expires:` lines or past timestamps fail `RFC 9116` validation.
+- **Strict constraints**:
+  - `Preferred-Languages:` may appear **at most once** (comma-separated tags, e.g., `en, es`).
+  - `Encryption:` MUST be a URI (`https://.../pgp-key.txt` or `openpgp4fpr:...`), never an inline PGP key block.
+  - Recommend including `Canonical: https://example.com/.well-known/security.txt` and signing with an OpenPGP cleartext signature (`RFC 4880`).

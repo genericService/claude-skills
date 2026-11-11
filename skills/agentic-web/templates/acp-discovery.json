@@ -1,0 +1,14 @@
+{
+  "protocol": {
+    "name": "acp",
+    "version": "2026-04-17",
+    "supported_versions": ["2026-04-17"],
+    "documentation_url": "https://agenticcommerce.dev"
+  },
+  "api_base_url": "https://acme.com/api/acp",
+  "transports": ["rest"],
+  "capabilities": {
+    "services": ["checkout", "orders"],
+    "intervention_Capabilities": ["3ds"]
+  }
+}

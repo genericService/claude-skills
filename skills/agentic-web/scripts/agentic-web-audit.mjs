@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * @fileoverview Deterministic repo scanner, AST/schema validator, and live HTTP
- * readiness auditor for the 2026 Agentic Web stack:
- * - llms.txt v2+ (https://llmstxt.org/, August 2026 AST + Link relations + .md twins)
- * - AdCP v3.2+ (/.well-known/brand.json, /.well-known/adagents.json)
- * - RFC 8615 well-known discovery (mcp.json SEP-2127, agent-card.json A2A,
- *   api-catalog RFC 9727, oauth-protected-resource RFC 9728, security.txt RFC 9116)
- * - Crawl signals & browser tooling (robots.txt Content-Signal / IETF aipref, WebMCP)
+ * @fileoverview Deterministic repo scanner, primary-source AST/schema validator,
+ * and live HTTP readiness auditor for the Agentic Web v2.0 stack:
+ * - llms.txt v2+ (https://llmstxt.org/, AnswerDotAI/llms-txt parser rules,
+ *   RFC 8288 Link relations, .md twins, Chrome Lighthouse agentic-browsing)
+ * - AdCP v3.2.8+ (/.well-known/brand.json, /.well-known/adagents.json)
+ * - RFC 8615 well-known discovery (SEP-2127 ai-catalog.json + server-card,
+ *   A2A v1.0.1 agent-card.json, RFC 9727 api-catalog, RFC 9728 oauth-protected-resource,
+ *   RFC 9116 security.txt)
+ * - Crawl rights, browser tools & commerce (IETF aipref Content-Usage, Cloudflare
+ *   Content-Signal, W3C TDMRep, W3C WebMCP document.modelContext, UCP, ACP)
  *
  * Requires Node.js >= 24.0.0. Zero external dependencies.
  */
@@ -66,11 +69,7 @@ const ADCP_AUTH_TYPES = new Map([
   ["signal_tags", "signal_tags"],
 ]);
 
-const BRAND_V5_FORBIDDEN_KEYS = [
-  "house",
-  "brands",
-  "brand_refs",
-  "authorized_operators",
+const BRAND_REDIRECT_ONLY_KEYS = [
   "authoritative_location",
   "redirect_reason",
   "redirect_effective_at",
@@ -78,9 +77,11 @@ const BRAND_V5_FORBIDDEN_KEYS = [
   "note",
 ];
 
+const A2A_PROTOCOL_BINDINGS = new Set(["JSONRPC", "HTTP+JSON", "GRPC"]);
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const BRAND_ID_RE = /^[a-z0-9_]+$/;
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const MCP_SERVER_CARD_NAME_RE = /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/;
 const SECRET_VALUE_RE = /(sk-[a-zA-Z0-9]{16,}|Bearer\s+[A-Za-z0-9._-]{16,}|ghp_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,})/;
 
 /**
@@ -167,13 +168,16 @@ function buildRepoManifest(rootDir) {
     framework = "astro";
   } else if (files.some((f) => f.includes(".vitepress/config"))) {
     framework = "vitepress";
+  } else if (fileSet.has("docusaurus.config.ts") || fileSet.has("docusaurus.config.js")) {
+    framework = "docusaurus";
   } else if (fileSet.has("hugo.toml") || fileSet.has("config.toml")) {
     framework = "hugo";
   }
 
-  const brandGuides = files.filter((f) =>
-    /^(DESIGN|GEMINI|CLAUDE|README|BRAND)\.md$/i.test(path.basename(f)) &&
-    f.split("/").length <= 2
+  const brandGuides = files.filter(
+    (f) =>
+      /^(DESIGN|GEMINI|CLAUDE|README|BRAND)\.md$/i.test(path.basename(f)) &&
+      f.split("/").length <= 2
   );
 
   const appRoutes = files
@@ -201,7 +205,11 @@ function buildRepoManifest(rootDir) {
     .sort();
 
   const wellKnownFiles = files
-    .filter((f) => f.includes(".well-known/"))
+    .filter(
+      (f) =>
+        f.includes(".well-known/") ||
+        /^(src\/)?app\/(brand|adagents|ai-catalog|agent-card|acp)\.json\/route\.(ts|js)$/.test(f)
+    )
     .sort();
 
   const middlewareFiles = files.filter((f) =>
@@ -224,20 +232,51 @@ function buildRepoManifest(rootDir) {
     wellKnownFiles,
     middlewareFiles,
     webMcpFiles,
-    hasLlmsTxt: fileSet.has("public/llms.txt") || fileSet.has("llms.txt") || files.some((f) => f.endsWith("llms.txt/route.ts")),
-    hasLlmsFullTxt: fileSet.has("public/llms-full.txt") || fileSet.has("llms-full.txt") || files.some((f) => f.endsWith("llms-full.txt/route.ts")),
-    hasRobots: fileSet.has("public/robots.txt") || fileSet.has("robots.txt") || files.some((f) => /^(src\/)?app\/robots\.(ts|js)$/.test(f)),
+    hasLlmsTxt:
+      fileSet.has("public/llms.txt") ||
+      fileSet.has("llms.txt") ||
+      files.some((f) => f.endsWith("llms.txt/route.ts")),
+    hasLlmsFullTxt:
+      fileSet.has("public/llms-full.txt") ||
+      fileSet.has("llms-full.txt") ||
+      files.some((f) => f.endsWith("llms-full.txt/route.ts")),
+    hasRobots:
+      fileSet.has("public/robots.txt") ||
+      fileSet.has("robots.txt") ||
+      files.some((f) => /^(src\/)?app\/robots\.(ts|js)$/.test(f)),
   };
 }
 
 /**
- * Parse and validate an llms.txt document against the August 2026 v2 AST spec.
+ * Parse and validate an llms.txt document against the August 2026 v2 AST spec,
+ * AnswerDotAI/llms-txt@0.0.7 parser invariants, and Chrome Lighthouse rules.
  * @param {string} rawText
  * @param {string} sourceLabel
  */
 function validateLlmsTxtV2(rawText, sourceLabel) {
   const findings = [];
+  if (rawText.startsWith("\uFEFF")) {
+    findings.push({
+      severity: "warning",
+      check: "llms-txt-bom",
+      location: `${sourceLabel}:1`,
+      message:
+        "UTF-8 BOM (\\uFEFF) detected on line 1. Python's AnswerDotAI/llms-txt parse_llms_file uses start.strip(), which fails to strip \\uFEFF and breaks H1 matching. Save as UTF-8 without BOM.",
+    });
+  }
+
   const text = rawText.replace(/^\uFEFF/, "");
+  const byteLength = Buffer.byteLength(text, "utf8");
+  if (text.trim().length < 50) {
+    findings.push({
+      severity: "error",
+      check: "llms-txt-lighthouse-min-length",
+      location: sourceLabel,
+      message:
+        "llms.txt has fewer than 50 non-whitespace characters and will fail Chrome Lighthouse's agentic-browsing llms-txt audit.",
+    });
+  }
+
   const lines = text.split(/\r?\n/);
 
   let state = "BEFORE_H1";
@@ -335,14 +374,36 @@ function validateLlmsTxtV2(rawText, sourceLabel) {
           severity: "warning",
           check: "llms-txt-v2-ast",
           location: `${sourceLabel}:${lineNo}`,
-          message: "Blockquote appears after preamble text; place the summary blockquote immediately after the H1 heading.",
+          message:
+            "Blockquote appears after preamble text; place the summary blockquote immediately after the H1 heading.",
         });
       }
       continue;
     }
 
     if (state === "IN_SECTION") {
-      const linkMatch = line.match(/^\s*[-*]\s+\[([^\]]+)\]\(([^)\s]+)\)(?:\s*:\s*(.*))?$/);
+      if (/^\s*[*+]\s+\[/.test(line)) {
+        findings.push({
+          severity: "error",
+          check: "llms-txt-bullet-marker",
+          location: `${sourceLabel}:${lineNo}`,
+          message: `Bullet "${trimmed.slice(0, 40)}..." uses '*' or '+'. AnswerDotAI/llms-txt parse_link matches '-' ONLY and crashes with AttributeError on '*' or '+'. Use '- [Title](url)'.`,
+        });
+        continue;
+      }
+
+      if (/^\s*-\s+\[[^\]]*\[/.test(line) || /^\s*-\s+\[[^\]]+\]\([^)\s]*\([^)\s]*\)/.test(line)) {
+        findings.push({
+          severity: "error",
+          check: "llms-txt-parser-escape",
+          location: `${sourceLabel}:${lineNo}`,
+          message:
+            "Nested '[' inside link title or unencoded '(' / ')' inside URL breaks the official reference regex. Remove square brackets from titles and percent-encode URL parentheses (%28 / %29).",
+        });
+        continue;
+      }
+
+      const linkMatch = line.match(/^\s*-\s*\[([^\]]+)\]\(([^)\s]+)\)(?:\s*:\s*(.*))?$/);
       if (!linkMatch) {
         findings.push({
           severity: "error",
@@ -389,6 +450,14 @@ function validateLlmsTxtV2(rawText, sourceLabel) {
       location: sourceLabel,
       message: "Missing recommended '> Summary' blockquote immediately after the H1 heading.",
     });
+  } else if (blockquoteLines.length > 1) {
+    findings.push({
+      severity: "warning",
+      check: "llms-txt-multiline-summary",
+      location: sourceLabel,
+      message:
+        "Summary blockquote spans multiple '>' lines. AnswerDotAI/llms-txt matches only a single-line '> summary' via ^> (?P<summary>.+?$)$; collapse the summary onto one line.",
+    });
   }
 
   if (totalLinks === 0) {
@@ -396,7 +465,7 @@ function validateLlmsTxtV2(rawText, sourceLabel) {
       severity: "warning",
       check: "llms-txt-v2-links",
       location: sourceLabel,
-      message: "llms.txt contains zero H2 file-list links.",
+      message: "llms.txt contains zero H2 file-list links (fails Chrome Lighthouse llms-txt check).",
     });
   } else if (htmlOnlyInternalLinks > 0) {
     findings.push({
@@ -407,7 +476,16 @@ function validateLlmsTxtV2(rawText, sourceLabel) {
     });
   }
 
-  const estimatedTokens = Math.ceil(Buffer.byteLength(text, "utf8") / 4);
+  if (byteLength > 50 * 1024) {
+    findings.push({
+      severity: "warning",
+      check: "llms-txt-size-cap-50kib",
+      location: sourceLabel,
+      message: `llms.txt is ${Math.round(byteLength / 1024)} KiB (> 50 KiB strict validator ceiling). Keep /llms.txt compact and move full content to /llms-full.txt.`,
+    });
+  }
+
+  const estimatedTokens = Math.ceil(byteLength / 4);
   if (estimatedTokens > 4000) {
     findings.push({
       severity: "warning",
@@ -425,12 +503,13 @@ function validateLlmsTxtV2(rawText, sourceLabel) {
       sectionNames: [...sections.keys()],
       totalLinks,
       estimatedTokens,
+      bytes: byteLength,
     },
   };
 }
 
 /**
- * Validate a brand.json object against AdCP v3.2.10 schema invariants.
+ * Validate a brand.json object against AdCP v3.2.8 schema invariants.
  * @param {unknown} doc
  * @param {string} sourceLabel
  */
@@ -453,13 +532,17 @@ function validateBrandJson(doc, sourceLabel) {
       severity: "error",
       check: "adcp-brand-json",
       location: sourceLabel,
-      message: "Found non-standard keys ('brand_name' or 'brand_colors'). AdCP v3 brand.json uses 'id' + 'names' and 'colors'.",
+      message:
+        "Found non-standard keys ('brand_name' or 'brand_colors'). AdCP v3 brand.json uses 'version' + 'id' + 'names' and 'colors'.",
     });
   }
 
   // Variant 1: authoritative_location redirect
   if ("authoritative_location" in obj) {
-    if (typeof obj.authoritative_location !== "string" || !obj.authoritative_location.startsWith("https://")) {
+    if (
+      typeof obj.authoritative_location !== "string" ||
+      !obj.authoritative_location.startsWith("https://")
+    ) {
       findings.push({
         severity: "error",
         check: "adcp-brand-json",
@@ -470,47 +553,72 @@ function validateBrandJson(doc, sourceLabel) {
     return findings;
   }
 
-  // Variant 4 or 2: house present
-  if ("house" in obj) {
-    if (typeof obj.house === "string") {
-      if (!DOMAIN_RE.test(obj.house)) {
-        findings.push({
-          severity: "error",
-          check: "adcp-brand-json",
-          location: sourceLabel,
-          message: `Variant 2 house redirect "${obj.house}" must be a bare lowercase DNS hostname.`,
-        });
-      }
-      return findings;
+  // Variant 2: house string redirect
+  if (typeof obj.house === "string") {
+    if (!DOMAIN_RE.test(obj.house)) {
+      findings.push({
+        severity: "error",
+        check: "adcp-brand-json",
+        location: sourceLabel,
+        message: `Variant 2 house redirect "${obj.house}" must be a bare lowercase DNS hostname.`,
+      });
     }
-    if (obj.house && typeof obj.house === "object") {
-      const house = /** @type {Record<string, unknown>} */ (obj.house);
-      if (typeof house.domain !== "string" || !DOMAIN_RE.test(house.domain) || typeof house.name !== "string") {
-        findings.push({
-          severity: "error",
-          check: "adcp-brand-json",
-          location: sourceLabel,
-          message: "Variant 4 house object requires valid 'domain' (bare DNS hostname) and 'name'.",
-        });
+    return findings;
+  }
+
+  // Variants 3, 4, and 5 require version: "1.0" in AdCP 3.2.8
+  if (obj.version !== "1.0") {
+    findings.push({
+      severity: "warning",
+      check: "adcp-brand-json-version",
+      location: sourceLabel,
+      message: `AdCP v3.2.8 brand.json expects root "version": "1.0" (got ${JSON.stringify(obj.version)}).`,
+    });
+  }
+
+  // Variant 4: House Portfolio (may stand alone or compose with Variant 5)
+  const hasHouseObject = Boolean(obj.house && typeof obj.house === "object" && !Array.isArray(obj.house));
+  if (hasHouseObject) {
+    const house = /** @type {Record<string, unknown>} */ (obj.house);
+    if (
+      typeof house.domain !== "string" ||
+      !DOMAIN_RE.test(house.domain) ||
+      typeof house.name !== "string"
+    ) {
+      findings.push({
+        severity: "error",
+        check: "adcp-brand-json",
+        location: sourceLabel,
+        message: "Variant 4 house object requires valid 'domain' (bare DNS hostname) and 'name'.",
+      });
+    }
+    const brands = Array.isArray(obj.brands) ? obj.brands : [];
+    const brandRefs = Array.isArray(obj.brand_refs) ? obj.brand_refs : [];
+    if (brands.length === 0 && brandRefs.length === 0) {
+      findings.push({
+        severity: "error",
+        check: "adcp-brand-json",
+        location: sourceLabel,
+        message:
+          "Variant 4 house portfolio requires at least one entry in 'brands[]' or 'brand_refs[]'.",
+      });
+    }
+    const inlineIds = new Set();
+    for (const b of brands) {
+      if (b && typeof b === "object" && typeof b.id === "string") {
+        inlineIds.add(b.id);
       }
-      const brands = Array.isArray(obj.brands) ? obj.brands : [];
-      const brandRefs = Array.isArray(obj.brand_refs) ? obj.brand_refs : [];
-      if (brands.length === 0 && brandRefs.length === 0) {
-        findings.push({
-          severity: "error",
-          check: "adcp-brand-json",
-          location: sourceLabel,
-          message: "Variant 4 house portfolio requires at least one entry in 'brands[]' or 'brand_refs[]'.",
-        });
-      }
-      const inlineIds = new Set();
-      for (const b of brands) {
-        if (b && typeof b === "object" && typeof b.id === "string") {
-          inlineIds.add(b.id);
-        }
-      }
-      for (const ref of brandRefs) {
-        if (ref && typeof ref === "object" && typeof ref.brand_id === "string" && inlineIds.has(ref.brand_id)) {
+    }
+    for (const ref of brandRefs) {
+      if (ref && typeof ref === "object") {
+        if (typeof ref.brand_id !== "string" || !BRAND_ID_RE.test(ref.brand_id)) {
+          findings.push({
+            severity: "error",
+            check: "adcp-brand-json",
+            location: sourceLabel,
+            message: "Each brand_refs[] item requires 'brand_id' matching ^[a-z0-9_]+$.",
+          });
+        } else if (inlineIds.has(ref.brand_id)) {
           findings.push({
             severity: "error",
             check: "adcp-brand-json",
@@ -519,23 +627,25 @@ function validateBrandJson(doc, sourceLabel) {
           });
         }
       }
+    }
+    if (!("id" in obj) && !("names" in obj)) {
       return findings;
     }
   }
 
-  // Variant 3: MCP agent pointer without inline brand id
-  if (("agents" in obj || "brand_agent" in obj) && !("id" in obj)) {
+  // Variant 3: Brand Agent Pointer without inline brand id
+  if (("agents" in obj || "brand_agent" in obj) && !("id" in obj) && !hasHouseObject) {
     return findings;
   }
 
   // Variant 5: Brand Canonical Document
-  for (const forbidden of BRAND_V5_FORBIDDEN_KEYS) {
+  for (const forbidden of BRAND_REDIRECT_ONLY_KEYS) {
     if (forbidden in obj) {
       findings.push({
         severity: "error",
         check: "adcp-brand-json",
         location: sourceLabel,
-        message: `Key "${forbidden}" is disallowed on a Variant 5 standalone Brand Canonical Document.`,
+        message: `Redirect key "${forbidden}" is disallowed on a Brand Canonical Document.`,
       });
     }
   }
@@ -554,16 +664,23 @@ function validateBrandJson(doc, sourceLabel) {
       severity: "error",
       check: "adcp-brand-json",
       location: sourceLabel,
-      message: "Variant 5 brand.json requires a non-empty 'names' array (for example: [{ \"en_US\": \"Brand Name\" }]).",
+      message:
+        'Variant 5 brand.json requires a non-empty \'names\' array (for example: [{ "en_US": "Brand Name" }]).',
     });
   } else {
     for (const item of obj.names) {
-      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).length !== 1) {
+      if (
+        !item ||
+        typeof item !== "object" ||
+        Array.isArray(item) ||
+        Object.keys(item).length !== 1
+      ) {
         findings.push({
           severity: "error",
           check: "adcp-brand-json",
           location: sourceLabel,
-          message: "Each entry in 'names[]' must be a single-key locale object such as { \"en_US\": \"Acme\" }.",
+          message:
+            'Each entry in \'names[]\' must be a single-key locale object such as { "en_US": "Acme" }.',
         });
       }
     }
@@ -589,13 +706,30 @@ function validateBrandJson(doc, sourceLabel) {
             });
           }
         }
+      } else if (val && typeof val === "object" && !Array.isArray(val)) {
+        const pair = /** @type {Record<string, unknown>} */ (val);
+        for (const mode of ["light", "dark"]) {
+          if (typeof pair[mode] === "string" && !HEX_COLOR_RE.test(pair[mode])) {
+            findings.push({
+              severity: "warning",
+              check: "adcp-brand-json",
+              location: sourceLabel,
+              message: `Color "${role}.${mode}": "${pair[mode]}" should be a 6-digit hex code (#RRGGBB).`,
+            });
+          }
+        }
       }
     }
   }
 
   if (Array.isArray(obj.logos)) {
     for (const logo of obj.logos) {
-      if (!logo || typeof logo !== "object" || typeof logo.url !== "string" || !logo.url.startsWith("http")) {
+      if (
+        !logo ||
+        typeof logo !== "object" ||
+        typeof logo.url !== "string" ||
+        !logo.url.startsWith("http")
+      ) {
         findings.push({
           severity: "error",
           check: "adcp-brand-json",
@@ -610,7 +744,7 @@ function validateBrandJson(doc, sourceLabel) {
 }
 
 /**
- * Validate an adagents.json object against AdCP v3.2.10 schema invariants.
+ * Validate an adagents.json object against AdCP v3.2.8 schema invariants.
  * @param {unknown} doc
  * @param {string} sourceLabel
  */
@@ -629,7 +763,10 @@ function validateAdagentsJson(doc, sourceLabel) {
   const obj = /** @type {Record<string, unknown>} */ (doc);
 
   if ("authoritative_location" in obj) {
-    if (typeof obj.authoritative_location !== "string" || !obj.authoritative_location.startsWith("https://")) {
+    if (
+      typeof obj.authoritative_location !== "string" ||
+      !obj.authoritative_location.startsWith("https://")
+    ) {
       findings.push({
         severity: "error",
         check: "adcp-adagents-json",
@@ -650,6 +787,21 @@ function validateAdagentsJson(doc, sourceLabel) {
     return findings;
   }
 
+  if (obj.authorized_agents.length === 0) {
+    const hasCatalogData = ["properties", "placements", "formats", "collections", "signals"].some(
+      (k) => Array.isArray(obj[k]) && obj[k].length > 0
+    );
+    if (!hasCatalogData) {
+      findings.push({
+        severity: "warning",
+        check: "adcp-adagents-empty",
+        location: sourceLabel,
+        message:
+          "authorized_agents is empty and no catalog arrays (properties, placements, formats, collections, signals) are populated.",
+      });
+    }
+  }
+
   const declaredPropertyIds = new Set();
   if (Array.isArray(obj.properties)) {
     for (const prop of obj.properties) {
@@ -657,12 +809,18 @@ function validateAdagentsJson(doc, sourceLabel) {
       if (typeof prop.property_id === "string") {
         declaredPropertyIds.add(prop.property_id);
       }
-      if (typeof prop.property_type !== "string" || typeof prop.name !== "string" || !Array.isArray(prop.identifiers) || prop.identifiers.length === 0) {
+      if (
+        typeof prop.property_type !== "string" ||
+        typeof prop.name !== "string" ||
+        !Array.isArray(prop.identifiers) ||
+        prop.identifiers.length === 0
+      ) {
         findings.push({
           severity: "error",
           check: "adcp-adagents-json",
           location: sourceLabel,
-          message: "Each entry in properties[] requires 'property_type', 'name', and non-empty 'identifiers[]'.",
+          message:
+            "Each entry in properties[] requires 'property_type', 'name', and non-empty 'identifiers[]'.",
         });
       }
       if (Array.isArray(prop.supported_channels)) {
@@ -701,12 +859,17 @@ function validateAdagentsJson(doc, sourceLabel) {
       });
     }
 
-    if (typeof agent.authorized_for !== "string" || agent.authorized_for.trim().length === 0 || agent.authorized_for.length > 500) {
+    if (
+      typeof agent.authorized_for !== "string" ||
+      agent.authorized_for.trim().length === 0 ||
+      agent.authorized_for.length > 500
+    ) {
       findings.push({
         severity: "error",
         check: "adcp-adagents-json",
         location: `${sourceLabel}#authorized_agents[${i}]`,
-        message: "authorized_agents entry requires 'authorized_for' (1 to 500 characters) per AdCP authorized-agent-base.json.",
+        message:
+          "authorized_agents entry requires 'authorized_for' (1 to 500 characters) per AdCP authorized-agent-base.json.",
       });
     }
 
@@ -719,6 +882,16 @@ function validateAdagentsJson(doc, sourceLabel) {
         message: `Invalid authorization_type ${JSON.stringify(authType)}. Expected one of: ${[...ADCP_AUTH_TYPES.keys()].join(", ")}.`,
       });
       continue;
+    }
+
+    if (authType === "inline_properties" && "inline_properties" in agent && !("properties" in agent)) {
+      findings.push({
+        severity: "error",
+        check: "adcp-adagents-inline-key",
+        location: `${sourceLabel}#authorized_agents[${i}]`,
+        message:
+          'When authorization_type is "inline_properties", the companion array key MUST be named "properties" (never "inline_properties").',
+      });
     }
 
     const requiredArrayField = ADCP_AUTH_TYPES.get(authType);
@@ -740,6 +913,31 @@ function validateAdagentsJson(doc, sourceLabel) {
           });
         }
       }
+    } else if (authType === "publisher_properties") {
+      for (let j = 0; j < agent.publisher_properties.length; j += 1) {
+        const sel = agent.publisher_properties[j];
+        if (!sel || typeof sel !== "object") continue;
+        const hasSingle = typeof sel.publisher_domain === "string";
+        const hasMulti = Array.isArray(sel.publisher_domains) && sel.publisher_domains.length > 0;
+        if (hasSingle === hasMulti) {
+          findings.push({
+            severity: "error",
+            check: "adcp-adagents-publisher-selector",
+            location: `${sourceLabel}#authorized_agents[${i}].publisher_properties[${j}]`,
+            message:
+              "Each publisher_properties selector requires exactly one of 'publisher_domain' (string) XOR 'publisher_domains' (non-empty array).",
+          });
+        }
+        if (sel.selection_type === "by_id" && hasMulti) {
+          findings.push({
+            severity: "error",
+            check: "adcp-adagents-publisher-selector",
+            location: `${sourceLabel}#authorized_agents[${i}].publisher_properties[${j}]`,
+            message:
+              "selection_type 'by_id' forbids 'publisher_domains' array; scope 'by_id' to a single 'publisher_domain'.",
+          });
+        }
+      }
     }
   }
 
@@ -747,19 +945,86 @@ function validateAdagentsJson(doc, sourceLabel) {
 }
 
 /**
- * Validate /.well-known/mcp.json (SEP-2127 Server Card).
+ * Validate /.well-known/ai-catalog.json (SEP-2127 domain discovery).
+ * @param {unknown} doc
+ * @param {string} sourceLabel
+ */
+function validateAiCatalogJson(doc, sourceLabel) {
+  const findings = [];
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    findings.push({
+      severity: "error",
+      check: "sep2127-ai-catalog",
+      location: sourceLabel,
+      message: "ai-catalog.json must be a JSON object.",
+    });
+    return findings;
+  }
+  const obj = /** @type {Record<string, unknown>} */ (doc);
+  if (obj.specVersion !== "1.0") {
+    findings.push({
+      severity: "error",
+      check: "sep2127-ai-catalog",
+      location: sourceLabel,
+      message: `ai-catalog.json requires 'specVersion': "1.0" (got ${JSON.stringify(obj.specVersion)}).`,
+    });
+  }
+  if (!Array.isArray(obj.entries)) {
+    findings.push({
+      severity: "error",
+      check: "sep2127-ai-catalog",
+      location: sourceLabel,
+      message: "ai-catalog.json requires an 'entries' array.",
+    });
+  } else {
+    for (let i = 0; i < obj.entries.length; i += 1) {
+      const entry = obj.entries[i];
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        typeof entry.identifier !== "string" ||
+        typeof entry.type !== "string" ||
+        typeof entry.url !== "string" ||
+        !entry.url.startsWith("https://")
+      ) {
+        findings.push({
+          severity: "error",
+          check: "sep2127-ai-catalog",
+          location: `${sourceLabel}#entries[${i}]`,
+          message:
+            "Each ai-catalog.json entry requires 'identifier', 'type' (e.g. 'application/mcp-server-card+json'), and an https:// 'url'.",
+        });
+      }
+    }
+  }
+  return findings;
+}
+
+/**
+ * Validate an MCP SEP-2127 Server Card (v1/server-card.schema.json) or legacy mcp.json.
  * @param {unknown} doc
  * @param {string} rawText
  * @param {string} sourceLabel
+ * @param {boolean} isLegacyMcpJsonPath
  */
-function validateMcpJson(doc, rawText, sourceLabel) {
+function validateMcpServerCard(doc, rawText, sourceLabel, isLegacyMcpJsonPath = false) {
   const findings = [];
   if (SECRET_VALUE_RE.test(rawText)) {
     findings.push({
       severity: "error",
       check: "mcp-server-card-security",
       location: sourceLabel,
-      message: "Potential secret or token detected inside public mcp.json. Never include credentials in /.well-known/mcp.json.",
+      message:
+        "Potential secret or token detected inside public MCP discovery file. Never publish credentials in server cards.",
+    });
+  }
+  if (isLegacyMcpJsonPath) {
+    findings.push({
+      severity: "warning",
+      check: "sep2127-ai-catalog-migration",
+      location: sourceLabel,
+      message:
+        "SEP-2127 standardized domain MCP discovery on /.well-known/ai-catalog.json + <mcp-url>/server-card (mcp.json is SEP-2633 local client config). Consider publishing /.well-known/ai-catalog.json.",
     });
   }
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
@@ -767,7 +1032,7 @@ function validateMcpJson(doc, rawText, sourceLabel) {
       severity: "error",
       check: "mcp-server-card",
       location: sourceLabel,
-      message: "mcp.json must be a JSON object.",
+      message: "MCP Server Card must be a JSON object.",
     });
     return findings;
   }
@@ -778,23 +1043,50 @@ function validateMcpJson(doc, rawText, sourceLabel) {
         severity: "error",
         check: "mcp-server-card",
         location: sourceLabel,
-        message: `mcp.json missing required string field '${req}'.`,
+        message: `MCP Server Card missing required string field '${req}'.`,
       });
     }
   }
-  if (!Array.isArray(obj.remotes) || obj.remotes.length === 0) {
+  if (!isLegacyMcpJsonPath) {
+    if (obj.$schema !== "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json") {
+      findings.push({
+        severity: "warning",
+        check: "mcp-server-card-schema",
+        location: sourceLabel,
+        message:
+          'SEP-2127 Server Card requires "$schema": "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json".',
+      });
+    }
+    if (typeof obj.name === "string" && !MCP_SERVER_CARD_NAME_RE.test(obj.name)) {
+      findings.push({
+        severity: "error",
+        check: "mcp-server-card-name",
+        location: sourceLabel,
+        message: `SEP-2127 Server Card 'name' "${obj.name}" must use reverse-DNS namespace format (e.g. "com.acme/ops-server").`,
+      });
+    }
+    if (typeof obj.description === "string" && obj.description.length > 100) {
+      findings.push({
+        severity: "error",
+        check: "mcp-server-card-description",
+        location: sourceLabel,
+        message: `SEP-2127 Server Card 'description' is ${obj.description.length} chars (maxLength is 100 plain-text characters).`,
+      });
+    }
+  }
+  if ("remotes" in obj && (!Array.isArray(obj.remotes) || obj.remotes.length === 0)) {
     findings.push({
       severity: "error",
       check: "mcp-server-card",
       location: sourceLabel,
-      message: "mcp.json requires a non-empty 'remotes[]' array with { type, url }.",
+      message: "When 'remotes' is present, it must be a non-empty array of { type, url }.",
     });
   }
   return findings;
 }
 
 /**
- * Validate /.well-known/agent-card.json (A2A).
+ * Validate /.well-known/agent-card.json (A2A v1.0.1 lf.a2a.v1.AgentCard).
  * @param {unknown} doc
  * @param {string} sourceLabel
  */
@@ -820,14 +1112,71 @@ function validateAgentCardJson(doc, sourceLabel) {
       });
     }
   }
-  if (typeof obj.url !== "string" && !Array.isArray(obj.supportedInterfaces)) {
+
+  if (Array.isArray(obj.supportedInterfaces) && obj.supportedInterfaces.length > 0) {
+    for (let i = 0; i < obj.supportedInterfaces.length; i += 1) {
+      const iface = obj.supportedInterfaces[i];
+      if (
+        !iface ||
+        typeof iface !== "object" ||
+        typeof iface.url !== "string" ||
+        !A2A_PROTOCOL_BINDINGS.has(iface.protocolBinding) ||
+        typeof iface.protocolVersion !== "string"
+      ) {
+        findings.push({
+          severity: "error",
+          check: "a2a-supported-interfaces",
+          location: `${sourceLabel}#supportedInterfaces[${i}]`,
+          message:
+            "Each supportedInterfaces[] item requires 'url', 'protocolBinding' ('JSONRPC' | 'HTTP+JSON' | 'GRPC'), and 'protocolVersion' ('1.0').",
+        });
+      }
+    }
+  } else if (typeof obj.url === "string") {
+    findings.push({
+      severity: "warning",
+      check: "a2a-v1-migration",
+      location: sourceLabel,
+      message:
+        "agent-card.json uses legacy A2A v0.3 top-level 'url'. A2A v1.0.1 requires 'supportedInterfaces: [{ url, protocolBinding, protocolVersion: \"1.0\" }]'.",
+    });
+  } else {
     findings.push({
       severity: "error",
       check: "a2a-agent-card",
       location: sourceLabel,
-      message: "agent-card.json requires either 'url' or 'supportedInterfaces[]'.",
+      message: "agent-card.json requires non-empty 'supportedInterfaces[]' (A2A v1.0.1).",
     });
   }
+
+  if (obj.capabilities && typeof obj.capabilities === "object" && "stateTransitionHistory" in obj.capabilities) {
+    findings.push({
+      severity: "warning",
+      check: "a2a-v1-migration",
+      location: sourceLabel,
+      message:
+        "capabilities.stateTransitionHistory was removed in A2A v1.0 (replaced by capabilities.extendedAgentCard).",
+    });
+  }
+
+  if ("security" in obj && !("securityRequirements" in obj)) {
+    findings.push({
+      severity: "warning",
+      check: "a2a-v1-migration",
+      location: sourceLabel,
+      message: "Top-level 'security' was renamed to 'securityRequirements' in A2A v1.0.",
+    });
+  }
+
+  if (!Array.isArray(obj.defaultInputModes) || !Array.isArray(obj.defaultOutputModes)) {
+    findings.push({
+      severity: "warning",
+      check: "a2a-agent-card",
+      location: sourceLabel,
+      message: "A2A v1.0 AgentCard requires 'defaultInputModes' and 'defaultOutputModes' string arrays.",
+    });
+  }
+
   if (!Array.isArray(obj.skills) || obj.skills.length === 0) {
     findings.push({
       severity: "warning",
@@ -835,6 +1184,26 @@ function validateAgentCardJson(doc, sourceLabel) {
       location: sourceLabel,
       message: "agent-card.json should declare at least one skill in 'skills[]'.",
     });
+  } else {
+    for (let i = 0; i < obj.skills.length; i += 1) {
+      const skill = obj.skills[i];
+      if (
+        !skill ||
+        typeof skill !== "object" ||
+        typeof skill.id !== "string" ||
+        typeof skill.name !== "string" ||
+        typeof skill.description !== "string" ||
+        !Array.isArray(skill.tags)
+      ) {
+        findings.push({
+          severity: "error",
+          check: "a2a-skill-schema",
+          location: `${sourceLabel}#skills[${i}]`,
+          message:
+            "Every A2A v1.0 AgentSkill requires 'id', 'name', 'description', and a 'tags' string array.",
+        });
+      }
+    }
   }
   return findings;
 }
@@ -885,12 +1254,135 @@ function validateOauthProtectedResource(doc, sourceLabel) {
     });
     return findings;
   }
-  if (typeof doc.resource !== "string" || !Array.isArray(doc.authorization_servers) || doc.authorization_servers.length === 0) {
+  const obj = /** @type {Record<string, unknown>} */ (doc);
+  if (
+    typeof obj.resource !== "string" ||
+    !Array.isArray(obj.authorization_servers) ||
+    obj.authorization_servers.length === 0
+  ) {
     findings.push({
       severity: "error",
       check: "rfc9728-oauth-protected-resource",
       location: sourceLabel,
-      message: "RFC 9728 oauth-protected-resource requires 'resource' and non-empty 'authorization_servers[]'.",
+      message:
+        "RFC 9728 oauth-protected-resource requires 'resource' and non-empty 'authorization_servers[]'.",
+    });
+  }
+  for (const [key, val] of Object.entries(obj)) {
+    if (key !== "bearer_methods_supported" && Array.isArray(val) && val.length === 0) {
+      findings.push({
+        severity: "warning",
+        check: "rfc9728-empty-array",
+        location: sourceLabel,
+        message: `RFC 9728 Section 2 requires omitting empty metadata array '${key}' instead of setting [].`,
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Validate /.well-known/tdmrep.json (W3C TDM Reservation Protocol).
+ * @param {unknown} doc
+ * @param {string} sourceLabel
+ */
+function validateTdmRepJson(doc, sourceLabel) {
+  const findings = [];
+  if (!Array.isArray(doc)) {
+    findings.push({
+      severity: "error",
+      check: "w3c-tdmrep-json",
+      location: sourceLabel,
+      message:
+        "W3C tdmrep.json root MUST be a JSON Array of { location, 'tdm-reservation': 0 | 1 } objects.",
+    });
+    return findings;
+  }
+  for (let i = 0; i < doc.length; i += 1) {
+    const rule = doc[i];
+    if (
+      !rule ||
+      typeof rule !== "object" ||
+      typeof rule.location !== "string" ||
+      (rule["tdm-reservation"] !== 0 && rule["tdm-reservation"] !== 1)
+    ) {
+      findings.push({
+        severity: "error",
+        check: "w3c-tdmrep-json",
+        location: `${sourceLabel}[${i}]`,
+        message: "Each tdmrep.json rule requires 'location' (string) and 'tdm-reservation' (0 or 1).",
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Validate /.well-known/ucp (Universal Commerce Protocol 2026-08-25).
+ * @param {unknown} doc
+ * @param {string} sourceLabel
+ */
+function validateUcpProfile(doc, sourceLabel) {
+  const findings = [];
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    findings.push({
+      severity: "error",
+      check: "ucp-profile",
+      location: sourceLabel,
+      message: "/.well-known/ucp must be a JSON object.",
+    });
+    return findings;
+  }
+  const obj = /** @type {Record<string, unknown>} */ (doc);
+  const ucp = /** @type {Record<string, unknown> | undefined} */ (
+    obj.ucp && typeof obj.ucp === "object" ? obj.ucp : undefined
+  );
+  if (!ucp || typeof ucp.version !== "string" || !ucp.services || typeof ucp.services !== "object") {
+    findings.push({
+      severity: "error",
+      check: "ucp-profile",
+      location: sourceLabel,
+      message: "/.well-known/ucp requires root 'ucp' object with 'version' and 'services'.",
+    });
+  }
+  if ("keys" in obj && !Array.isArray(obj.keys)) {
+    findings.push({
+      severity: "error",
+      check: "ucp-profile",
+      location: sourceLabel,
+      message: "/.well-known/ucp 'keys' field must be an array of JWKs.",
+    });
+  }
+  return findings;
+}
+
+/**
+ * Validate /.well-known/acp.json (Agentic Commerce Protocol 2026-04-17).
+ * @param {unknown} doc
+ * @param {string} sourceLabel
+ */
+function validateAcpDiscovery(doc, sourceLabel) {
+  const findings = [];
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    findings.push({
+      severity: "error",
+      check: "acp-discovery",
+      location: sourceLabel,
+      message: "/.well-known/acp.json must be a JSON object.",
+    });
+    return findings;
+  }
+  const obj = /** @type {Record<string, unknown>} */ (doc);
+  const proto = /** @type {Record<string, unknown> | undefined} */ (
+    obj.protocol && typeof obj.protocol === "object" ? obj.protocol : undefined
+  );
+  if (!proto || proto.name !== "acp" || typeof proto.version !== "string" || typeof obj.api_base_url !== "string") {
+    findings.push({
+      severity: "error",
+      check: "acp-discovery",
+      location: sourceLabel,
+      message:
+        "/.well-known/acp.json requires 'protocol: { name: \"acp\", version }' and 'api_base_url'.",
     });
   }
   return findings;
@@ -903,43 +1395,63 @@ function validateOauthProtectedResource(doc, sourceLabel) {
  */
 function validateSecurityTxt(text, sourceLabel) {
   const findings = [];
-  const hasContact = /^Contact:\s*\S+/m.test(text);
-  const expiresMatch = text.match(/^Expires:\s*(.+)$/m);
+  const contacts = [...text.matchAll(/^Contact:\s*(\S+)\s*$/gm)].map((m) => m[1]);
+  const expiresMatches = [...text.matchAll(/^Expires:\s*(.+)$/gm)].map((m) => m[1].trim());
+  const prefLangMatches = [...text.matchAll(/^Preferred-Languages:\s*(.+)$/gm)];
+  const encryptionMatches = [...text.matchAll(/^Encryption:\s*(.+)$/gm)].map((m) => m[1].trim());
 
-  if (!hasContact) {
+  if (contacts.length === 0) {
     findings.push({
       severity: "error",
       check: "rfc9116-security-txt",
       location: sourceLabel,
       message: "security.txt is missing required 'Contact:' field (RFC 9116).",
     });
+  } else {
+    for (const c of contacts) {
+      if (!/^(mailto:|tel:|https:\/\/)/i.test(c)) {
+        findings.push({
+          severity: "warning",
+          check: "rfc9116-contact-scheme",
+          location: sourceLabel,
+          message: `security.txt Contact "${c}" should use mailto:, tel:, or https:// URI scheme.`,
+        });
+      }
+    }
   }
 
-  if (!expiresMatch) {
+  if (expiresMatches.length === 0) {
     findings.push({
       severity: "error",
       check: "rfc9116-security-txt",
       location: sourceLabel,
-      message: "security.txt is missing required 'Expires:' ISO 8601 timestamp (RFC 9116).",
+      message: "security.txt is missing required 'Expires:' RFC 3339 timestamp (RFC 9116).",
     });
   } else {
-    const expDate = new Date(expiresMatch[1].trim());
+    if (expiresMatches.length > 1) {
+      findings.push({
+        severity: "error",
+        check: "rfc9116-single-expires",
+        location: sourceLabel,
+        message: "RFC 9116 forbids multiple 'Expires:' lines in security.txt.",
+      });
+    }
+    const expDate = new Date(expiresMatches[0]);
     if (Number.isNaN(expDate.getTime())) {
       findings.push({
         severity: "error",
         check: "rfc9116-security-txt",
         location: sourceLabel,
-        message: `Invalid 'Expires:' date "${expiresMatch[1].trim()}" in security.txt.`,
+        message: `Invalid 'Expires:' date "${expiresMatches[0]}" in security.txt.`,
       });
     } else {
-      const now = Date.now();
-      const daysRemaining = (expDate.getTime() - now) / (1000 * 60 * 60 * 24);
+      const daysRemaining = (expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
       if (daysRemaining <= 0) {
         findings.push({
           severity: "error",
           check: "rfc9116-security-txt",
           location: sourceLabel,
-          message: `security.txt expired on ${expDate.toISOString()}. Update 'Expires:' to a future ISO 8601 timestamp.`,
+          message: `security.txt expired on ${expDate.toISOString()}. Update 'Expires:' to a future RFC 3339 timestamp.`,
         });
       } else if (daysRemaining < 30) {
         findings.push({
@@ -948,7 +1460,66 @@ function validateSecurityTxt(text, sourceLabel) {
           location: sourceLabel,
           message: `security.txt expires in ${Math.round(daysRemaining)} days (${expDate.toISOString()}). Renew soon.`,
         });
+      } else if (daysRemaining > 366) {
+        findings.push({
+          severity: "warning",
+          check: "rfc9116-expires-horizon",
+          location: sourceLabel,
+          message: `security.txt 'Expires:' is ${Math.round(daysRemaining)} days ahead; RFC 9116 Section 2.5.5 recommends less than 1 year.`,
+        });
       }
+    }
+  }
+
+  if (prefLangMatches.length > 1) {
+    findings.push({
+      severity: "error",
+      check: "rfc9116-preferred-languages",
+      location: sourceLabel,
+      message: "RFC 9116 allows 'Preferred-Languages:' at most once (use comma-separated tags).",
+    });
+  }
+
+  if (text.includes("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
+    findings.push({
+      severity: "error",
+      check: "rfc9116-encryption-uri",
+      location: sourceLabel,
+      message:
+        "RFC 9116 Section 2.5.4 forbids inline PGP public key blocks in security.txt; 'Encryption:' must be a URI pointing to the key.",
+    });
+  } else {
+    for (const enc of encryptionMatches) {
+      if (!/^(https:\/\/|openpgp4fpr:|dns:)/i.test(enc)) {
+        findings.push({
+          severity: "warning",
+          check: "rfc9116-encryption-uri",
+          location: sourceLabel,
+          message: `Encryption "${enc}" should be an https://, openpgp4fpr:, or dns: URI.`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Validate IETF aipref Content-Usage syntax if present.
+ * @param {string} text
+ * @param {string} sourceLabel
+ */
+function validateCrawlSignalsText(text, sourceLabel) {
+  const findings = [];
+  const usageLines = [...text.matchAll(/Content-Usage\s*:\s*([^\r\n"']+)/gi)].map((m) => m[1]);
+  for (const line of usageLines) {
+    if (/=\s*(yes|no)\b/i.test(line)) {
+      findings.push({
+        severity: "error",
+        check: "aipref-content-usage-tokens",
+        location: sourceLabel,
+        message: `Content-Usage "${line.trim()}" uses yes/no; IETF draft-ietf-aipref-vocab requires RFC 9651 tokens 'y' or 'n' (e.g. "train-ai=n, ai-use=y, search=y"). Use 'Content-Signal' for yes/no.`,
+      });
     }
   }
   return findings;
@@ -982,25 +1553,30 @@ function auditLocalRepo(rootDir) {
     findings.push(...res.findings);
   }
 
-  // 2. Discoverability link relations in codebase (rel="alternate" type="text/markdown" + rel="describedby")
+  // 2. Discoverability link relations in codebase
   const configAndLayoutFiles = walkRepo(rootDir).filter((f) =>
-    /^(src\/)?app\/.*layout\.(tsx|ts|jsx|js)$|^next\.config\.(ts|mjs|js)$|^(src\/)?(middleware|proxy)\.(ts|js|mjs)$|^public\/_headers$/.test(f)
+    /^(src\/)?app\/.*layout\.(tsx|ts|jsx|js)$|^next\.config\.(ts|mjs|js)$|^(src\/)?(middleware|proxy)\.(ts|js|mjs)$|^public\/_headers$|\.vitepress\/config\.(ts|mjs|js)$/.test(
+      f
+    )
   );
   const combinedConfigText = configAndLayoutFiles
     .map((f) => fs.readFileSync(path.join(rootDir, f), "utf8"))
     .join("\n");
 
+  const hasVitepressPluginLlms = combinedConfigText.includes("vitepress-plugin-llms");
   const hasMarkdownAlternate =
-    combinedConfigText.includes("text/markdown") &&
-    (combinedConfigText.includes("alternate") || combinedConfigText.includes("alternates"));
-  const hasDescribedBy = combinedConfigText.includes("describedby");
+    hasVitepressPluginLlms ||
+    (combinedConfigText.includes("text/markdown") &&
+      (combinedConfigText.includes("alternate") || combinedConfigText.includes("alternates")));
+  const hasDescribedBy = hasVitepressPluginLlms || combinedConfigText.includes("describedby");
 
   if (!hasMarkdownAlternate) {
     findings.push({
       severity: "warning",
       check: "llms-txt-v2-link-alternate",
       location: "layout / headers",
-      message: "No 'rel=\"alternate\" type=\"text/markdown\"' link or Next.js alternates.types['text/markdown'] declaration detected.",
+      message:
+        "No 'rel=\"alternate\" type=\"text/markdown\"' link or Next.js alternates.types['text/markdown'] declaration detected.",
     });
   }
   if (!hasDescribedBy) {
@@ -1008,7 +1584,8 @@ function auditLocalRepo(rootDir) {
       severity: "warning",
       check: "llms-txt-v2-link-describedby",
       location: "layout / headers",
-      message: "No 'rel=\"describedby\"' link pointing to /llms.txt detected in HTML <head> or HTTP Link headers.",
+      message:
+        "No 'rel=\"describedby\"' link pointing to /llms.txt detected in HTML <head> or HTTP Link headers.",
     });
   }
 
@@ -1025,14 +1602,68 @@ function auditLocalRepo(rootDir) {
     }
   }
 
-  // 4. AdCP & RFC 8615 well-known files check
+  // 4. WebMCP API migration check (document.modelContext vs legacy navigator.modelContext)
+  for (const wmcpRel of manifest.webMcpFiles) {
+    const wmcpText = fs.readFileSync(path.join(rootDir, wmcpRel), "utf8");
+    if (wmcpText.includes("navigator.modelContext") && !wmcpText.includes("document.modelContext")) {
+      findings.push({
+        severity: "warning",
+        check: "webmcp-document-model-context",
+        location: wmcpRel,
+        message:
+          "W3C WebMCP (May 2026+) moved from navigator.modelContext to document.modelContext with AbortSignal cleanup. Prefer document.modelContext first.",
+      });
+    }
+  }
+
+  // 5. AdCP & RFC 8615 well-known files check
   const wellKnownJsonValidators = [
-    { rel: "public/.well-known/brand.json", fn: (doc) => validateBrandJson(doc, "public/.well-known/brand.json") },
-    { rel: "public/.well-known/adagents.json", fn: (doc) => validateAdagentsJson(doc, "public/.well-known/adagents.json") },
-    { rel: "public/.well-known/mcp.json", fn: (doc, raw) => validateMcpJson(doc, raw, "public/.well-known/mcp.json") },
-    { rel: "public/.well-known/agent-card.json", fn: (doc) => validateAgentCardJson(doc, "public/.well-known/agent-card.json") },
-    { rel: "public/.well-known/api-catalog", fn: (doc) => validateApiCatalogJson(doc, "public/.well-known/api-catalog") },
-    { rel: "public/.well-known/oauth-protected-resource", fn: (doc) => validateOauthProtectedResource(doc, "public/.well-known/oauth-protected-resource") },
+    {
+      rel: "public/.well-known/brand.json",
+      fn: (doc) => validateBrandJson(doc, "public/.well-known/brand.json"),
+    },
+    {
+      rel: "public/.well-known/adagents.json",
+      fn: (doc) => validateAdagentsJson(doc, "public/.well-known/adagents.json"),
+    },
+    {
+      rel: "public/.well-known/ai-catalog.json",
+      fn: (doc) => validateAiCatalogJson(doc, "public/.well-known/ai-catalog.json"),
+    },
+    {
+      rel: "public/.well-known/mcp/server-card.json",
+      fn: (doc, raw) =>
+        validateMcpServerCard(doc, raw, "public/.well-known/mcp/server-card.json", false),
+    },
+    {
+      rel: "public/.well-known/mcp.json",
+      fn: (doc, raw) => validateMcpServerCard(doc, raw, "public/.well-known/mcp.json", true),
+    },
+    {
+      rel: "public/.well-known/agent-card.json",
+      fn: (doc) => validateAgentCardJson(doc, "public/.well-known/agent-card.json"),
+    },
+    {
+      rel: "public/.well-known/api-catalog",
+      fn: (doc) => validateApiCatalogJson(doc, "public/.well-known/api-catalog"),
+    },
+    {
+      rel: "public/.well-known/oauth-protected-resource",
+      fn: (doc) =>
+        validateOauthProtectedResource(doc, "public/.well-known/oauth-protected-resource"),
+    },
+    {
+      rel: "public/.well-known/tdmrep.json",
+      fn: (doc) => validateTdmRepJson(doc, "public/.well-known/tdmrep.json"),
+    },
+    {
+      rel: "public/.well-known/ucp",
+      fn: (doc) => validateUcpProfile(doc, "public/.well-known/ucp"),
+    },
+    {
+      rel: "public/.well-known/acp.json",
+      fn: (doc) => validateAcpDiscovery(doc, "public/.well-known/acp.json"),
+    },
   ];
 
   const brandJsonPath = path.join(rootDir, "public/.well-known/brand.json");
@@ -1042,7 +1673,8 @@ function auditLocalRepo(rootDir) {
       severity: "warning",
       check: "adcp-brand-json-presence",
       location: "public/.well-known/brand.json",
-      message: "Missing /.well-known/brand.json (AdCP v3 canonical brand identity, palette, typography, and voice rules).",
+      message:
+        "Missing /.well-known/brand.json (AdCP v3.2.8 canonical brand identity, palette, typography, and voice rules).",
     });
   }
 
@@ -1065,7 +1697,12 @@ function auditLocalRepo(rootDir) {
 
   const secTxtPath = path.join(rootDir, "public/.well-known/security.txt");
   if (fs.existsSync(secTxtPath)) {
-    findings.push(...validateSecurityTxt(fs.readFileSync(secTxtPath, "utf8"), "public/.well-known/security.txt"));
+    findings.push(
+      ...validateSecurityTxt(
+        fs.readFileSync(secTxtPath, "utf8"),
+        "public/.well-known/security.txt"
+      )
+    );
   } else if (!manifest.wellKnownFiles.some((f) => f.includes("security.txt"))) {
     findings.push({
       severity: "warning",
@@ -1075,17 +1712,31 @@ function auditLocalRepo(rootDir) {
     });
   }
 
-  // 5. Crawl & Content-Signal check
-  const robotsFiles = ["public/robots.txt", "robots.txt", "app/robots.ts", "src/app/robots.ts"]
-    .filter((rel) => fs.existsSync(path.join(rootDir, rel)));
+  // 6. Crawl signals check (IETF aipref Content-Usage + Cloudflare Content-Signal)
+  const robotsFiles = [
+    "public/robots.txt",
+    "robots.txt",
+    "app/robots.ts",
+    "src/app/robots.ts",
+  ].filter((rel) => fs.existsSync(path.join(rootDir, rel)));
+
   if (robotsFiles.length > 0) {
-    const robotsText = robotsFiles.map((rel) => fs.readFileSync(path.join(rootDir, rel), "utf8")).join("\n");
-    if (!robotsText.includes("Content-Signal") && !combinedConfigText.includes("Content-Signal")) {
+    const robotsText = robotsFiles
+      .map((rel) => fs.readFileSync(path.join(rootDir, rel), "utf8"))
+      .join("\n");
+    findings.push(...validateCrawlSignalsText(`${robotsText}\n${combinedConfigText}`, robotsFiles[0]));
+    const hasSignal =
+      robotsText.includes("Content-Signal") ||
+      robotsText.includes("Content-Usage") ||
+      combinedConfigText.includes("Content-Signal") ||
+      combinedConfigText.includes("Content-Usage");
+    if (!hasSignal) {
       findings.push({
         severity: "info",
         check: "aipref-content-signal",
         location: robotsFiles[0],
-        message: "Consider declaring 'Content-Signal: search=yes, ai-input=yes, ai-train=no' in robots.txt or response headers.",
+        message:
+          "Consider declaring 'Content-Usage: train-ai=n, ai-use=y, search=y' (IETF aipref) and 'Content-Signal: search=yes, ai-input=yes, ai-train=no' in robots.txt or response headers.",
       });
     }
   } else {
@@ -1113,7 +1764,7 @@ async function auditLiveUrl(baseUrl) {
     const target = `${origin}${pathname}`;
     try {
       const res = await fetch(target, {
-        headers: { "User-Agent": "agentic-web-audit/1.0", ...headers },
+        headers: { "User-Agent": "agentic-web-audit/2.0", ...headers },
         redirect: manualRedirect ? "manual" : "follow",
         signal: AbortSignal.timeout(8000),
       });
@@ -1127,7 +1778,7 @@ async function auditLiveUrl(baseUrl) {
         cors: res.headers.get("access-control-allow-origin") ?? "",
         vary: res.headers.get("vary") ?? "",
         contentSignal: res.headers.get("content-signal") ?? "",
-        markdownTokens: res.headers.get("x-markdown-tokens") ?? "",
+        contentUsage: res.headers.get("content-usage") ?? "",
         bytes: Buffer.byteLength(body, "utf8"),
         body,
       };
@@ -1136,45 +1787,67 @@ async function auditLiveUrl(baseUrl) {
         ok: false,
         status: 0,
         error: err instanceof Error ? err.message : String(err),
+        locationHeader: "",
         contentType: "",
         linkHeader: "",
         cors: "",
         vary: "",
         contentSignal: "",
-        markdownTokens: "",
+        contentUsage: "",
         bytes: 0,
         body: "",
       };
     }
   }
 
-  const [homeRes, homeMdNeg, llmsRes, brandRes, adagentsRes, mcpRes, agentCardRes, apiCatRes, secRes, robotsRes] =
-    await Promise.all([
-      probe("/"),
-      probe("/", { Accept: "text/markdown" }),
-      probe("/llms.txt"),
-      probe("/.well-known/brand.json", {}, true),
-      probe("/.well-known/adagents.json", {}, true),
-      probe("/.well-known/mcp.json"),
-      probe("/.well-known/agent-card.json"),
-      probe("/.well-known/api-catalog"),
-      probe("/.well-known/security.txt"),
-      probe("/robots.txt"),
-    ]);
+  const [
+    homeRes,
+    homeMdNeg,
+    llmsRes,
+    brandRes,
+    adagentsRes,
+    aiCatalogRes,
+    mcpRes,
+    agentCardRes,
+    apiCatRes,
+    ucpRes,
+    acpRes,
+    secRes,
+    robotsRes,
+  ] = await Promise.all([
+    probe("/"),
+    probe("/", { Accept: "text/markdown" }),
+    probe("/llms.txt"),
+    probe("/.well-known/brand.json", {}, true),
+    probe("/.well-known/adagents.json", {}, true),
+    probe("/.well-known/ai-catalog.json"),
+    probe("/.well-known/mcp.json"),
+    probe("/.well-known/agent-card.json"),
+    probe("/.well-known/api-catalog"),
+    probe("/.well-known/ucp", {}, true),
+    probe("/.well-known/acp.json"),
+    probe("/.well-known/security.txt"),
+    probe("/robots.txt"),
+  ]);
 
-  probed["/"] = { status: homeRes.status, contentType: homeRes.contentType, linkHeader: homeRes.linkHeader };
+  probed["/"] = {
+    status: homeRes.status,
+    contentType: homeRes.contentType,
+    linkHeader: homeRes.linkHeader,
+  };
   probed["/ (Accept: text/markdown)"] = {
     status: homeMdNeg.status,
     contentType: homeMdNeg.contentType,
     vary: homeMdNeg.vary,
-    markdownTokens: homeMdNeg.markdownTokens,
     contentSignal: homeMdNeg.contentSignal,
+    contentUsage: homeMdNeg.contentUsage,
   };
 
-  // Check Link relations on homepage
-  const hasLinkAltHeader = homeRes.linkHeader.includes("text/markdown") && homeRes.linkHeader.includes("alternate");
+  const hasLinkAltHeader =
+    homeRes.linkHeader.includes("text/markdown") && homeRes.linkHeader.includes("alternate");
   const hasLinkDescHeader = homeRes.linkHeader.includes("describedby");
-  const hasHtmlAlt = /<link[^>]+rel=["']alternate["'][^>]+type=["']text\/markdown["']/i.test(homeRes.body) ||
+  const hasHtmlAlt =
+    /<link[^>]+rel=["']alternate["'][^>]+type=["']text\/markdown["']/i.test(homeRes.body) ||
     /<link[^>]+type=["']text\/markdown["'][^>]+rel=["']alternate["']/i.test(homeRes.body);
   const hasHtmlDesc = /<link[^>]+rel=["']describedby["']/i.test(homeRes.body);
 
@@ -1183,7 +1856,8 @@ async function auditLiveUrl(baseUrl) {
       severity: "warning",
       check: "live-llms-v2-link-alternate",
       location: `${origin}/`,
-      message: "Root page neither emits HTTP Link rel=\"alternate\"; type=\"text/markdown\" nor HTML <link rel=\"alternate\" type=\"text/markdown\">.",
+      message:
+        'Root page neither emits HTTP Link rel="alternate"; type="text/markdown" nor HTML <link rel="alternate" type="text/markdown">.',
     });
   }
   if (!hasLinkDescHeader && !hasHtmlDesc) {
@@ -1191,7 +1865,8 @@ async function auditLiveUrl(baseUrl) {
       severity: "warning",
       check: "live-llms-v2-link-describedby",
       location: `${origin}/`,
-      message: "Root page neither emits HTTP Link rel=\"describedby\" nor HTML <link rel=\"describedby\" href=\"/llms.txt\">.",
+      message:
+        'Root page neither emits HTTP Link rel="describedby" nor HTML <link rel="describedby" href="/llms.txt">.',
     });
   }
   if (!homeMdNeg.contentType.includes("text/markdown")) {
@@ -1199,12 +1874,24 @@ async function auditLiveUrl(baseUrl) {
       severity: "info",
       check: "live-accept-markdown",
       location: `${origin}/`,
-      message: "Origin does not negotiate 'Accept: text/markdown' at root URL (optional when static .md page twins are linked).",
+      message:
+        "Origin does not negotiate 'Accept: text/markdown' at root URL (optional when static .md page twins are linked).",
+    });
+  } else if (!homeMdNeg.vary.toLowerCase().includes("accept")) {
+    findings.push({
+      severity: "warning",
+      check: "live-accept-markdown-vary",
+      location: `${origin}/`,
+      message:
+        "Origin serves text/markdown on 'Accept: text/markdown' without 'Vary: Accept', risking CDN cache poisoning.",
     });
   }
 
-  // Validate /llms.txt
-  probed["/llms.txt"] = { status: llmsRes.status, contentType: llmsRes.contentType, bytes: llmsRes.bytes };
+  probed["/llms.txt"] = {
+    status: llmsRes.status,
+    contentType: llmsRes.contentType,
+    bytes: llmsRes.bytes,
+  };
   let llmsAst = null;
   if (!llmsRes.ok) {
     findings.push({
@@ -1218,7 +1905,7 @@ async function auditLiveUrl(baseUrl) {
       severity: "error",
       check: "live-llms-txt-content-type",
       location: `${origin}/llms.txt`,
-      message: `GET /llms.txt returned HTML (${llmsRes.contentType}) instead of text/markdown or text/plain. Check SPA fallback or middleware rules.`,
+      message: `GET /llms.txt returned HTML (${llmsRes.contentType}) instead of text/markdown or text/plain (fails Chrome Lighthouse llms-txt audit).`,
     });
   } else {
     const parsed = validateLlmsTxtV2(llmsRes.body, `${origin}/llms.txt`);
@@ -1226,10 +1913,16 @@ async function auditLiveUrl(baseUrl) {
     findings.push(...parsed.findings);
   }
 
-  // Helper for optional live JSON well-known endpoints
-  const checkLiveWellKnown = (pathname, res, validator, expectType = "application/json", isAdcpPointer = false) => {
+  const checkLiveWellKnown = (
+    pathname,
+    res,
+    validator,
+    expectType = "application/json",
+    redirectMode = "allow"
+  ) => {
+    if (res.status === 404 || res.status === 0) return;
     probed[pathname] = { status: res.status, contentType: res.contentType, cors: res.cors };
-    if (isAdcpPointer && res.status >= 300 && res.status < 400) {
+    if (redirectMode !== "allow" && res.status >= 300 && res.status < 400) {
       const loc = res.locationHeader;
       let isSameDomainWwwRedirect = false;
       try {
@@ -1239,14 +1932,23 @@ async function auditLiveUrl(baseUrl) {
       } catch {
         isSameDomainWwwRedirect = false;
       }
-      findings.push({
-        severity: isSameDomainWwwRedirect ? "warning" : "error",
-        check: isSameDomainWwwRedirect ? "adcp-canonical-host-redirect" : "adcp-no-redirect",
-        location: `${origin}${pathname}`,
-        message: isSameDomainWwwRedirect
-          ? `${pathname} returned HTTP ${res.status} to canonical host (${loc}). Prefer serving /.well-known/* directly with 200 OK on bare apex as well so strict no-redirect validators resolve without extra hops.`
-          : `${pathname} returned cross-host HTTP ${res.status} redirect (${loc}). AdCP requires 200 OK at origin (use inline 'authoritative_location' JSON pointer instead of HTTP 3xx redirects).`,
-      });
+      if (redirectMode === "zero") {
+        findings.push({
+          severity: "error",
+          check: "well-known-no-redirect",
+          location: `${origin}${pathname}`,
+          message: `${pathname} returned HTTP ${res.status} (${loc}); UCP specification forbids 3xx redirects on /.well-known/ucp.`,
+        });
+      } else {
+        findings.push({
+          severity: isSameDomainWwwRedirect ? "warning" : "error",
+          check: isSameDomainWwwRedirect ? "adcp-canonical-host-redirect" : "adcp-no-redirect",
+          location: `${origin}${pathname}`,
+          message: isSameDomainWwwRedirect
+            ? `${pathname} returned HTTP ${res.status} to canonical host (${loc}). AdCP allows up to 3 apex/www hops on initial fetch, though serving 200 OK directly on bare apex is fastest.`
+            : `${pathname} returned cross-host HTTP ${res.status} redirect (${loc}). AdCP forbids cross-domain HTTP redirects (use JSON 'authoritative_location' instead).`,
+        });
+      }
       return;
     }
     if (!res.ok) return;
@@ -1255,16 +1957,16 @@ async function auditLiveUrl(baseUrl) {
         severity: "error",
         check: "well-known-html-fallback",
         location: `${origin}${pathname}`,
-        message: `${pathname} returned HTML 200 OK (${res.contentType}). Exclude /.well-known/* from SPA fallback, Cloudflare challenges, and Next.js catch-all routes.`,
+        message: `${pathname} returned HTML 200 OK (${res.contentType}). Exclude /.well-known/* from SPA fallback and middleware rewrites.`,
       });
       return;
     }
-    if (isAdcpPointer && res.bytes > 5 * 1024 * 1024) {
+    if (redirectMode === "adcp" && res.bytes > 5 * 1024 * 1024) {
       findings.push({
         severity: "error",
         check: "adcp-size-cap",
         location: `${origin}${pathname}`,
-        message: `${pathname} exceeds AdCP 5 MB well-known SSRF size cap (${res.bytes} bytes).`,
+        message: `${pathname} exceeds AdCP 5 MB well-known size cap (${res.bytes} bytes).`,
       });
     }
     if (!res.contentType.includes(expectType) && !res.contentType.includes("json")) {
@@ -1297,11 +1999,51 @@ async function auditLiveUrl(baseUrl) {
     }
   };
 
-  checkLiveWellKnown("/.well-known/brand.json", brandRes, (d, _r, loc) => validateBrandJson(d, loc), "application/json", true);
-  checkLiveWellKnown("/.well-known/adagents.json", adagentsRes, (d, _r, loc) => validateAdagentsJson(d, loc), "application/json", true);
-  checkLiveWellKnown("/.well-known/mcp.json", mcpRes, (d, r, loc) => validateMcpJson(d, r, loc));
-  checkLiveWellKnown("/.well-known/agent-card.json", agentCardRes, (d, _r, loc) => validateAgentCardJson(d, loc));
-  checkLiveWellKnown("/.well-known/api-catalog", apiCatRes, (d, _r, loc) => validateApiCatalogJson(d, loc), "application/linkset+json");
+  checkLiveWellKnown(
+    "/.well-known/brand.json",
+    brandRes,
+    (d, _r, loc) => validateBrandJson(d, loc),
+    "application/json",
+    "adcp"
+  );
+  checkLiveWellKnown(
+    "/.well-known/adagents.json",
+    adagentsRes,
+    (d, _r, loc) => validateAdagentsJson(d, loc),
+    "application/json",
+    "adcp"
+  );
+  checkLiveWellKnown(
+    "/.well-known/ai-catalog.json",
+    aiCatalogRes,
+    (d, _r, loc) => validateAiCatalogJson(d, loc),
+    "application/ai-catalog+json"
+  );
+  checkLiveWellKnown("/.well-known/mcp.json", mcpRes, (d, r, loc) =>
+    validateMcpServerCard(d, r, loc, true)
+  );
+  checkLiveWellKnown(
+    "/.well-known/agent-card.json",
+    agentCardRes,
+    (d, _r, loc) => validateAgentCardJson(d, loc),
+    "application/a2a+json"
+  );
+  checkLiveWellKnown(
+    "/.well-known/api-catalog",
+    apiCatRes,
+    (d, _r, loc) => validateApiCatalogJson(d, loc),
+    "application/linkset+json"
+  );
+  checkLiveWellKnown(
+    "/.well-known/ucp",
+    ucpRes,
+    (d, _r, loc) => validateUcpProfile(d, loc),
+    "application/json",
+    "zero"
+  );
+  checkLiveWellKnown("/.well-known/acp.json", acpRes, (d, _r, loc) =>
+    validateAcpDiscovery(d, loc)
+  );
 
   if (!brandRes.ok && !(brandRes.status >= 300 && brandRes.status < 400)) {
     findings.push({
@@ -1312,7 +2054,10 @@ async function auditLiveUrl(baseUrl) {
     });
   }
 
-  probed["/.well-known/security.txt"] = { status: secRes.status, contentType: secRes.contentType };
+  probed["/.well-known/security.txt"] = {
+    status: secRes.status,
+    contentType: secRes.contentType,
+  };
   if (secRes.ok && !secRes.contentType.includes("text/html")) {
     findings.push(...validateSecurityTxt(secRes.body, `${origin}/.well-known/security.txt`));
   } else {
@@ -1325,13 +2070,22 @@ async function auditLiveUrl(baseUrl) {
   }
 
   probed["/robots.txt"] = { status: robotsRes.status };
-  if (robotsRes.ok && !robotsRes.body.includes("Content-Signal") && !homeRes.contentSignal) {
-    findings.push({
-      severity: "info",
-      check: "live-content-signal",
-      location: `${origin}/robots.txt`,
-      message: "No Content-Signal policy detected in /robots.txt or HTTP response headers.",
-    });
+  if (robotsRes.ok) {
+    findings.push(...validateCrawlSignalsText(robotsRes.body, `${origin}/robots.txt`));
+    const hasAnySignal =
+      robotsRes.body.includes("Content-Signal") ||
+      robotsRes.body.includes("Content-Usage") ||
+      Boolean(homeRes.contentSignal) ||
+      Boolean(homeRes.contentUsage);
+    if (!hasAnySignal) {
+      findings.push({
+        severity: "info",
+        check: "live-content-signal",
+        location: `${origin}/robots.txt`,
+        message:
+          "No Content-Usage (IETF aipref) or Content-Signal policy detected in /robots.txt or HTTP response headers.",
+      });
+    }
   }
 
   return { origin, probed, llmsAst, findings };
@@ -1400,7 +2154,9 @@ async function main() {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
     if (report.local) {
-      console.log(`Local Repo Audit: ${report.local.manifest.root} (${report.local.manifest.framework})`);
+      console.log(
+        `Local Repo Audit: ${report.local.manifest.root} (${report.local.manifest.framework})`
+      );
       console.log(
         `  Routes: ${report.local.manifest.appRoutes.length} | Content files: ${report.local.manifest.contentFiles.length} | .md twins: ${report.local.manifest.markdownTwins.length} | .well-known files: ${report.local.manifest.wellKnownFiles.length}`
       );
@@ -1413,12 +2169,16 @@ async function main() {
     if (report.live) {
       console.log(`Live URL Audit: ${report.live.origin}`);
       for (const [ep, meta] of Object.entries(report.live.probed)) {
-        console.log(`  ${ep.padEnd(32)} -> HTTP ${meta.status} ${meta.contentType ? `(${meta.contentType})` : ""}`);
+        console.log(
+          `  ${ep.padEnd(32)} -> HTTP ${meta.status} ${meta.contentType ? `(${meta.contentType})` : ""}`
+        );
       }
     }
     console.log("");
     if (allFindings.length === 0) {
-      console.log("PASS: Zero findings across llms.txt v2, AdCP v3, and RFC 8615 checks.");
+      console.log(
+        "PASS: Zero findings across llms.txt v2, AdCP v3.2.8, RFC 8615, and WebMCP checks."
+      );
     } else {
       for (const f of allFindings) {
         const tag = f.severity.toUpperCase().padEnd(7);

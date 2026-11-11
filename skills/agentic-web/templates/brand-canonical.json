@@ -1,0 +1,60 @@
+{
+  "$schema": "https://adcontextprotocol.org/schemas/v3/brand.json",
+  "version": "1.0",
+  "default_language": "en-US",
+  "id": "acme_corp",
+  "names": [
+    {
+      "en_US": "Acme Corp"
+    }
+  ],
+  "url": "https://acme.com",
+  "description": "Concise factual description of the organization, domain, and primary offering.",
+  "tagline": "Short factual tagline.",
+  "colors": {
+    "primary": "#D4A843",
+    "background": "#121214",
+    "surface_1": "#161618",
+    "text": "#F5F0EB",
+    "label": "#A5A5A5"
+  },
+  "fonts": {
+    "primary": "IBM Plex Mono",
+    "secondary": "Inter"
+  },
+  "logos": [
+    {
+      "id": "primary_wordmark",
+      "url": "https://acme.com/logo.svg",
+      "orientation": "horizontal",
+      "background": "dark-bg",
+      "variant": "primary",
+      "usage": "Primary wordmark for dark surfaces"
+    }
+  ],
+  "tone": {
+    "voice": "Direct, technical, and objective.",
+    "attributes": ["precise", "calm", "factual"],
+    "dos": [
+      "State concrete numbers, named technologies, and verifiable outcomes.",
+      "Use short sentences and active voice."
+    ],
+    "donts": [
+      "Avoid em dashes, filler transitions, and inflated marketing claims.",
+      "Never fabricate testimonials, metrics, or certifications."
+    ]
+  },
+  "properties": [
+    {
+      "type": "website",
+      "identifier": "acme.com",
+      "primary": true
+    }
+  ],
+  "contact": {
+    "name": "Acme Operations",
+    "email": "ops@acme.com",
+    "domain": "acme.com"
+  },
+  "last_updated": "2026-11-11T00:00:00Z"
+}

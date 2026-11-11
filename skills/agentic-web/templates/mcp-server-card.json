@@ -1,0 +1,14 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "acme-mcp",
+  "title": "Acme MCP Server",
+  "description": "Public read-only tools and structured documentation resources.",
+  "version": "1.0.0",
+  "websiteUrl": "https://acme.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://acme.com/api/mcp"
+    }
+  ]
+}

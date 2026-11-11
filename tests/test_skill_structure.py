@@ -80,3 +80,9 @@ class TestSkillStructure(unittest.TestCase):
 
     def test_google_contacts_structure(self):
         self.check_skill_structure('google-contacts')
+
+    def test_agentic_web_structure(self):
+        self.check_skill_structure('agentic-web')
+
+    def test_llms_txt_structure(self):
+        self.check_skill_structure('llms-txt')

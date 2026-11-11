@@ -1,0 +1,35 @@
+{
+  "$schema": "https://adcontextprotocol.org/schemas/v3/brand.json",
+  "version": "1.0",
+  "default_language": "en-US",
+  "house": {
+    "domain": "acmeinc.com",
+    "name": "Acme Holdings, Inc.",
+    "architecture": "house_of_brands"
+  },
+  "brands": [
+    {
+      "id": "acme_core",
+      "names": [
+        {
+          "en_US": "Acme Core"
+        }
+      ],
+      "url": "https://core.acmeinc.com",
+      "description": "Managed parent-owned flagship brand."
+    }
+  ],
+  "brand_refs": [
+    {
+      "brand_id": "acme_labs",
+      "domain": "acmelabs.com",
+      "effective_at": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "contact": {
+    "name": "Acme Brand Governance",
+    "email": "brand@acmeinc.com",
+    "domain": "acmeinc.com"
+  },
+  "last_updated": "2026-11-11T00:00:00Z"
+}

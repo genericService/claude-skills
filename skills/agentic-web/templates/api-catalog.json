@@ -1,0 +1,25 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://acme.com/api",
+      "service-desc": [
+        {
+          "href": "https://acme.com/api/openapi.json",
+          "type": "application/vnd.oai.openapi+json;version=3.1"
+        }
+      ],
+      "service-doc": [
+        {
+          "href": "https://acme.com/docs/api.md",
+          "type": "text/markdown"
+        }
+      ],
+      "status": [
+        {
+          "href": "https://acme.com/api/health",
+          "type": "application/json"
+        }
+      ]
+    }
+  ]
+}

@@ -1,50 +1,41 @@
 ---
 name: llms-txt
-version: 2.0.0
-description: "Script-First llms.txt generator. Uses a deterministic script to crawl the project structure, identify brand guides, and catalog content files. Provides a repo manifest for the agent to draft context-aware /llms.txt and /llms-full.txt files."
+version: 3.0.0
+description: "Script-First llms.txt v2+ generator (llmstxt.org August 2026 spec). Crawls repo structure and generates strict v2-compliant /llms.txt, clean .md page twins, Link relations (rel=alternate/describedby), and /llms-full.txt. Pairs with agentic-web for AdCP /.well-known/brand.json and RFC 8615 discovery."
 ---
 
-# LLMs.txt Generator
+# LLMs.txt v2+ Generator
 
-Generate `/llms.txt` and `/llms-full.txt` files for web projects following the llmstxt.org spec.
+Generate and validate `/llms.txt`, subpath `llms.txt` indexes, `.md` page twins, `Link` relations, and `/llms-full.txt` following the official [llmstxt.org v2 specification](https://llmstxt.org/) (August 2026).
 
-This workflow uses a **Script-First** approach: a crawler script handles the "labor" of mapping the repo structure and finding brand rules, leaving the agent to handle the "judgment" of writing the LLM-friendly context files.
+> **Full-Stack Agentic Discovery (`agentic-web`)**: Whenever a project also needs AdCP v3 (`/.well-known/brand.json`, `/.well-known/adagents.json`), RFC 8615 manifests (`mcp.json`, `agent-card.json`, `api-catalog`, `oauth-protected-resource`, `security.txt`), `Content-Signal` headers, or WebMCP, activate the `agentic-web` skill (`skills/agentic-web/SKILL.md`).
 
 ## Usage
 
-When asked to "generate llms.txt", "make the site AI-friendly", or "add llms-full.txt":
+When asked to "generate llms.txt", "upgrade llms.txt to v2", or "make pages readable as Markdown for agents":
 
-1. **Run the manifest script:**
+1. **Run the deterministic manifest scanner:**
    ```bash
-   python3 ~/.agents/skills/llms-txt/scripts/generate_llms_manifest.py \
-     --root "." \
-     --out "llms_manifest.json"
+   # Node 24 full v2 + RFC 8615 scanner/validator (preferred when agentic-web is installed):
+   node ~/.agents/skills/agentic-web/scripts/agentic-web-audit.mjs --root . --manifest llms-manifest.json
+   # Or Python fallback manifest crawler:
+   python3 ~/.agents/skills/llms-txt/scripts/generate_llms_manifest.py --root "." --out "llms_manifest.json"
    ```
 
-2. **Read the manifest:**
-   Load `llms_manifest.json` to see:
-   - Discovered brand guides (README.md, GEMINI.md, etc.).
-   - List of all content files (.md, .mdx, .txt).
-   - High-level project structure and summary snippet.
+2. **Draft `/llms.txt` Using the Strict v2 Sequential AST:**
+   1. `# Project or Site Name` (single H1, required)
+   2. `> Concise 1-2 sentence summary` (blockquote immediately below H1)
+   3. Optional orientation preamble (paragraphs and bullet lists with **zero headings**)
+   4. `## Section Name` H2 file-list sections containing ONLY Markdown link items:
+      `- [Page Title](https://domain.com/page.md): Concise note`
+   5. Optional `## Optional` H2 section for secondary resources (editorial convention in v2; `llms_txt2ctx` context expansion is deprecated).
 
-3. **Draft Context Files:**
-   Use the manifest to create the two required files:
-   - `/public/llms.txt`: Brief summary, brand guardrails, and top-level links.
-   - `/public/llms-full.txt`: Comprehensive manifest including all content links.
+3. **Expose Clean `.md` Twins & v2 Link Relations:**
+   - Serve clean Markdown equivalents using either the replace pattern (`/docs/auth.md`, `/index.md`) or append pattern (`/docs/auth.html.md`, `/index.html.md`).
+   - Emit standard discovery links via HTML `<head>` tags and/or HTTP `Link:` headers:
+     ```http
+     Link: </docs/auth.md>; rel="alternate"; type="text/markdown", </llms.txt>; rel="describedby"
+     ```
 
-## File Standards
-
-### llms.txt (The Brief)
-- Start with a H1 title and brief description.
-- **LLM Instructions section**: Explicit rules for how other agents should write for this project.
-- **Top-level links**: Point to major sections (Docs, API, Components).
-
-### llms-full.txt (The Full Record)
-- List every public-facing content file identified in the manifest.
-- Group by directory.
-- Provide a 1-sentence description for each major section.
-
-## Anti-patterns (The "Hot Take" List)
-- **Agent labor:** Don't manually `ls -R` to find files; use the script.
-- **Hallucinated links:** Only include files found in the deterministic manifest.
-- **Vague descriptions:** Use the `summary_snippet` from the manifest to ground the project purpose.
+4. **Offload Structured Brand Governance to `/.well-known/brand.json`:**
+   - Never place `### Visual Identity` subheadings or raw prose paragraphs inside `##` sections of `/llms.txt` (violates v2 file-list parser grammar). Place short stack/voice invariants in the heading-free preamble above the first `##`, and publish full palette/font/logo/voice governance at `/.well-known/brand.json` (AdCP v3) or a linked `/brand.md` document.

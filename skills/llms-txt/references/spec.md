@@ -1,58 +1,44 @@
-# llmstxt.org Specification Summary
+# llmstxt.org v2 Specification Summary
 
-Source: [llmstxt.org](https://llmstxt.org/) by Jeremy Howard (fast.ai / Answer.AI), published 2024-09-03.
+Source: [llmstxt.org](https://llmstxt.org/) and [Changes (v2, August 2026)](https://llmstxt.org/changes.md) by Jeremy Howard (Answer.AI).
 
 ## Core Concept
 
-A `/llms.txt` file is a **Markdown file** served at a site's root path that provides LLM-friendly context about the site. It solves the problem of LLMs needing to understand a site's content without crawling and parsing complex HTML.
+`/llms.txt` is a Markdown index file placed at `/llms.txt` (or at any subpath such as `/docs/llms.txt`) giving coding agents and LLM-powered assistants a concise overview and curated links to clean Markdown versions of pages.
 
-The file is for **inference time** (when an agent needs to understand a site to help a user), not primarily for training.
+## What Changed in v2 (August 2026)
 
-## Format Rules
+1. **Discoverability via Link Relations (`RFC 8288`)**:
+   - `rel="alternate" type="text/markdown"` points from an HTML page to its Markdown twin.
+   - `rel="describedby"` points from any page or asset to the `llms.txt` file covering it.
+   - Declared via `<link>` elements in HTML `<head>` or HTTP `Link:` response headers.
+2. **Flexible `.md` URL Conventions**:
+   - Append pattern: `/page.html` -> `/page.html.md` (`/index.html.md` for directory paths).
+   - Replace pattern: `/page.html` -> `/page.md` (`/index.md` for directory paths).
+3. **Subpath Scoping ("Most Specific Wins")**:
+   - `/docs/llms.txt` covers all URLs under `/docs/`. When both `/llms.txt` and `/docs/llms.txt` apply, agents use the most specific file.
+4. **Direct Consumption Model**:
+   - Agents inspect or search `llms.txt` directly and follow relevant `.md` links on demand.
+   - Context-expansion tooling (`llms_txt2ctx`) was retired from the proposal; `## Optional` remains a valid editorial convention for secondary links without mechanical parser semantics.
 
-The file is standard Markdown with this specific structure:
+## Strict Sequential AST Format
 
-1. **H1 heading** (required) -- the project or site name
-2. **Blockquote** (optional) -- short summary with key information
-3. **Body paragraphs** (optional) -- additional context, no headings allowed here
-4. **H2 sections** (optional) -- each containing a list of links to detailed pages
-5. **"Optional" H2 section** (optional) -- links that can be skipped for shorter context
+1. **Optional UTF-8 BOM**
+2. **H1 heading (`# Title`)**: Required; single H1 naming the project or site.
+3. **Summary blockquote (`> ...`)**: Concise summary immediately following the H1.
+4. **Preamble body**: Zero or more paragraphs or bullet lists providing orientation and technical constraints. **Zero headings allowed before the first H2.**
+5. **H2 file-list sections (`## Section`)**: Zero or more sections where every item is a Markdown link list entry:
+   ```markdown
+   - [Link title](https://example.com/page.md): Concise description of the linked file
+   ```
 
-Link format within H2 sections:
-```markdown
-- [Link title](https://url): Optional description of the linked content
-```
+## Relationship to Companion Standards
 
-## File Variants
-
-| Path | Content | Convention |
-|------|---------|------------|
-| `/llms.txt` | Curated index with links. Small, always fits in context. | Spec-defined |
-| `/llms-full.txt` | Complete documentation content inlined. Large. | Community convention |
-| `/llms-small.txt` | Compact version, non-essential content removed. | Community convention |
-| `*.html.md` | Markdown version of any HTML page (append `.md` to URL). | Proposed in spec |
-
-## What the Spec Does NOT Define
-
-- No required sections beyond the H1
-- No schema for metadata or frontmatter
-- No `style` parameter or structured brand fields
-- No versioning mechanism
-- No authentication or access control
-
-The spec is deliberately minimal. The "Instructions for LLMs" section (used by Stripe and others) is a community convention, not part of the spec.
-
-## Relationship to Other Standards
-
-| Standard | Purpose | Relationship |
-|----------|---------|-------------|
-| `robots.txt` | Controls crawler access | Different purpose; llms.txt is for inference |
-| `sitemap.xml` | Lists all indexable pages | Too large; llms.txt is curated |
-| `humans.txt` | Credits the team behind a site | Complementary |
-| JSON-LD / Schema.org | Structured page metadata | Complementary |
-
-## Tooling
-
-- `llms_txt2ctx` -- CLI tool that expands llms.txt by fetching and inlining linked content
-- VitePress, Docusaurus, Drupal plugins for auto-generation
-- [llmstxt.site](https://llmstxt.site/) and [directory.llmstxt.cloud](https://directory.llmstxt.cloud/) -- directories of known files
+| Standard | Path | Role |
+| :--- | :--- | :--- |
+| **`llms.txt` v2** | `/llms.txt` or `/<subpath>/llms.txt` | Curated Markdown index for on-demand agent navigation |
+| **AdCP `brand.json`** | `/.well-known/brand.json` | Canonical JSON Schema brand identity, colors, typography, logos, and voice guardrails |
+| **AdCP `adagents.json`** | `/.well-known/adagents.json` | Publisher property and sales-agent authorization |
+| **MCP Server Card** | `/.well-known/mcp.json` | SEP-2127 remote HTTP MCP tool server discovery |
+| **API Catalog** | `/.well-known/api-catalog` | RFC 9727 JSON Linkset pointing to OpenAPI specs and docs |
+| **`robots.txt` + `Content-Signal`** | `/robots.txt` | Crawler access and `search` / `ai-input` / `ai-train` preferences |

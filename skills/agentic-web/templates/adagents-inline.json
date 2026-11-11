@@ -1,0 +1,36 @@
+{
+  "$schema": "https://adcontextprotocol.org/schemas/v3/adagents.json",
+  "contact": {
+    "name": "Acme Media Operations",
+    "email": "adops@acme.com",
+    "domain": "acme.com",
+    "privacy_policy_url": "https://acme.com/privacy"
+  },
+  "catalog_etag": "2026-11-11-v1",
+  "properties": [
+    {
+      "property_id": "main_web",
+      "property_type": "website",
+      "name": "Acme Publication",
+      "identifiers": [
+        {
+          "type": "domain",
+          "value": "acme.com"
+        }
+      ],
+      "supported_channels": ["display", "sponsored_intelligence"]
+    }
+  ],
+  "authorized_agents": [
+    {
+      "url": "https://sales-agent.acme.com/mcp",
+      "authorized_for": "Direct sponsorship and display packages on Acme Publication",
+      "authorization_type": "property_ids",
+      "property_ids": ["main_web"],
+      "delegation_type": "direct",
+      "exclusive": true,
+      "countries": ["US", "CA"]
+    }
+  ],
+  "last_updated": "2026-11-11T00:00:00Z"
+}

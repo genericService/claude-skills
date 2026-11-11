@@ -34,6 +34,7 @@ Skills are consumed by Claude (`~/.claude/skills/`) and Gemini (`~/.gemini/skill
 | Skill                        | Purpose                                                                      |
 | ---------------------------- | ---------------------------------------------------------------------------- |
 | `agentic-os`                 | Framework-agnostic persistent memory layer (.agent/) for cross-agent task queues and learnings |
+| `agentic-web`                | Full-stack Agentic Web discovery: llms.txt v2+, AdCP v3.2+ (brand.json, adagents.json), RFC 8615 manifests, Content-Signal, WebMCP |
 | `buffer-api`                 | Schedule, create, and manage social media posts via the Buffer GraphQL API   |
 | `business-brain`             | Tone, audience, and brand positioning context shared across skills           |
 | `claude-use-gemini-acp`      | Delegate sub-tasks from Claude to Gemini CLI via Agent Client Protocol       |
@@ -49,7 +50,7 @@ Skills are consumed by Claude (`~/.claude/skills/`) and Gemini (`~/.gemini/skill
 | `heartbeat`                  | Agentic OS orchestrator — pops tasks from the .agent queue and routes to skills |
 | `kitchen-sink-design-system` | Framework-agnostic Kitchen Sink design system workflow and component inventory|
 | `linkedin-chrome`            | LinkedIn content management via Chrome browser automation                    |
-| `llms-txt`                   | Generate /llms.txt and /llms-full.txt for web projects (llmstxt.org spec)   |
+| `llms-txt`                   | Generate strict v2-compliant /llms.txt, .md twins, Link relations, and /llms-full.txt (llmstxt.org v2) |
 | `nextjs-tinacms`             | Next.js 16 + TinaCMS + Tina Cloud + Vercel -- visual editing, blocks, SEO   |
 | `omni-image`                 | xAI/OpenAI image generation, editing, vision, batch processing (xAI default)|
 | `osint`                      | Open-source intelligence on people, companies, and domains                   |

@@ -1,0 +1,20 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "Acme Corp AI Services",
+    "identifier": "did:web:acme.com"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:acme.com:server:ops",
+      "displayName": "Acme Operations MCP Server",
+      "type": "application/mcp-server-card+json",
+      "url": "https://acme.com/api/mcp/server-card",
+      "description": "Public read-only service catalog, pricing estimator, and documentation tools.",
+      "representativeQueries": [
+        "estimate infrastructure assessment fee for 40 hosts",
+        "list Acme service offerings and timelines"
+      ]
+    }
+  ]
+}

@@ -6,7 +6,7 @@ Portable AI agent skill distribution. Skills are framework-agnostic instruction 
 
 | Skill                          | Description                                                                                                                                                      |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **agentic-web**                | Unified Agentic Web discovery, identity, and governance: `llms.txt` v2+, AdCP v3.2+ (`brand.json`, `adagents.json`), RFC 8615 `.well-known` manifests, `Content-Signal`, WebMCP |
+| **agentic-web**                | Unified Agentic Web discovery, identity, entity graph, and governance: `llms.txt` v2+, AdCP v3.2+ (`brand.json`, `adagents.json`), JSON-LD 1.1 / `Schema.org` (`schema-dts`), RFC 8615 `.well-known` (`ard.json`, `ai-catalog.json`, `agent-card.json`), `Content-Signal`, WebMCP |
 | **llms-txt**                   | `llmstxt.org` v2 (August 2026) `/llms.txt`, `.md` page twins, `Link` relations (`alternate` / `describedby`), and `/llms-full.txt`                               |
 | **cloudflare-pages**           | Cloudflare Pages deployment and configuration                                                                                                                    |
 | **deep-research**              | Structured deep research methodology                                                                                                                             |

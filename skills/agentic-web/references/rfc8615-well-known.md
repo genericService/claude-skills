@@ -14,7 +14,7 @@ Primary-source implementation reference for **IETF RFC 8615** (`/.well-known/`),
 2. **Exact Media Types & Sniffing Protection**:
    - Serve over `https` (`200 OK`) with `X-Content-Type-Options: nosniff` and `Access-Control-Allow-Origin: *`.
    - Use each specification's registered media type:
-     - `/.well-known/ai-catalog.json`: `application/ai-catalog+json`
+     - `/.well-known/ard.json` & `/.well-known/ai-catalog.json`: `application/ai-catalog+json` (or `application/json`)
      - `<mcp-url>/server-card`: `application/mcp-server-card+json`
      - `/.well-known/agent-card.json`: `application/a2a+json` (or `application/json`) + `A2A-Version: 1.0`
      - `/.well-known/api-catalog`: `application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"`
@@ -30,22 +30,33 @@ Primary-source implementation reference for **IETF RFC 8615** (`/.well-known/`),
 
 Publish MCP discovery endpoints ONLY when the domain operates a real remote HTTP MCP server.
 
-### 2.1 SEP-2127 Canonical Discovery (`ai-catalog.json` + `<mcp-url>/server-card`)
-Per `modelcontextprotocol/ext-server-card` (**SEP-2127**):
-- Do **not** confuse `mcp.json` (**SEP-2633** local client configuration format) with SEP-2127 server discovery, and note that `/.well-known/mcp/server-card` was rejected during SEP-2127 review in favor of `ai-catalog.json` + `<mcp-url>/server-card`.
-- **Step 1: Domain Catalog (`GET /.well-known/ai-catalog.json`, `Content-Type: application/ai-catalog+json`)**:
+### 2.1 ARD (`/.well-known/ard.json`) & SEP-2127 (`ai-catalog.json` + `<mcp-url>/server-card`)
+Per `ards-project/ard-spec` (**ADR-0010**, Chrome Lighthouse 13.5+ `ard-schema` audit) and `modelcontextprotocol/ext-server-card` (**SEP-2127**):
+- Do **not** confuse `mcp.json` (**SEP-2633** local client configuration format) with SEP-2127 server discovery, and note that `/.well-known/mcp/server-card` was rejected during SEP-2127 review.
+- **ARD vs `ai-catalog` Relationship (`ADR-0010`)**: `ai-catalog` is the minimal provider publishing core referenced by SEP-2127, whereas **Agentic Resource Discovery (`/.well-known/ard.json`, linked via `<link rel="ard">`, HTTP `Link: <...>; rel="ard"`, or `robots.txt` `Agentmap:`)** is the superset manifest audited by Chrome Lighthouse 13.5+ (`ard-schema` flags `/.well-known/ai-catalog.json` alone as `legacyWellKnown`). Publish `/.well-known/ard.json` (and optionally alias `/.well-known/ai-catalog.json` to the same payload) so both Lighthouse `ard-schema` and SEP-2127 clients resolve cleanly:
   ```json
   {
     "specVersion": "1.0",
+    "host": {
+      "displayName": "Acme Corp AI Services",
+      "identifier": "did:web:acme.com"
+    },
     "entries": [
       {
-        "identifier": "urn:air:mcp:acme-ops",
+        "identifier": "urn:air:acme.com:server:ops",
+        "displayName": "Acme Operations MCP Server",
         "type": "application/mcp-server-card+json",
-        "url": "https://acme.com/api/mcp/server-card"
+        "url": "https://acme.com/api/mcp/server-card",
+        "representativeQueries": [
+          "estimate infrastructure assessment fee for 40 hosts",
+          "list Acme service offerings"
+        ]
       }
     ]
   }
   ```
+  - Every `identifier` MUST match `^urn:air:([a-zA-Z0-9.-]+)(?::([a-zA-Z0-9._:-]+))?:([a-zA-Z0-9._-]+)$` (`urn:air:<publisher-domain>:<namespace>:<name>`).
+  - Use `type: "application/mcp-server-card+json"` (ADR-0008 deprecated `application/mcp-server+json`) or `"application/a2a-agent-card+json"`.
 - **Step 2: Server Card (`GET <mcp-endpoint>/server-card`, `Content-Type: application/mcp-server-card+json`)**:
   Also advertise via `Link: <https://acme.com/api/mcp/server-card>; rel="describedby"; type="application/mcp-server-card+json"` on MCP endpoint responses.
   ```json

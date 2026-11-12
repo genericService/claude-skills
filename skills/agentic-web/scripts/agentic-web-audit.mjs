@@ -78,6 +78,25 @@ const BRAND_REDIRECT_ONLY_KEYS = [
 ];
 
 const A2A_PROTOCOL_BINDINGS = new Set(["JSONRPC", "HTTP+JSON", "GRPC"]);
+const ARD_URN_RE = /^urn:air:([a-zA-Z0-9.-]+)(?::([a-zA-Z0-9._:-]+))?:([a-zA-Z0-9._-]+)$/;
+const RETIRED_GOOGLE_RICH_RESULT_TYPES = new Set([
+  "HowTo",
+  "SpecialAnnouncement",
+  "ClaimReview",
+  "CourseInfo",
+  "EstimatedSalary",
+  "LearningVideo",
+  "VehicleListing",
+  "PracticeProblem",
+]);
+const ORG_LIKE_TYPES = new Set([
+  "Organization",
+  "Corporation",
+  "LocalBusiness",
+  "ProfessionalService",
+  "OnlineStore",
+  "NewsMediaOrganization",
+]);
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const BRAND_ID_RE = /^[a-z0-9_]+$/;
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
@@ -208,7 +227,7 @@ function buildRepoManifest(rootDir) {
     .filter(
       (f) =>
         f.includes(".well-known/") ||
-        /^(src\/)?app\/(brand|adagents|ai-catalog|agent-card|acp)\.json\/route\.(ts|js)$/.test(f)
+        /^(src\/)?app\/(brand|adagents|ard|ai-catalog|agent-card|acp)\.json\/route\.(ts|js)$/.test(f)
     )
     .sort();
 
@@ -216,11 +235,23 @@ function buildRepoManifest(rootDir) {
     /^(src\/)?(middleware|proxy)\.(ts|js|mjs)$/.test(f)
   );
 
-  const webMcpFiles = files.filter((f) => {
-    if (!/\.(ts|tsx|js|jsx|mjs)$/.test(f)) return false;
+  const webMcpFiles = [];
+  const jsonLdFiles = [];
+  for (const f of files) {
+    if (!/\.(ts|tsx|js|jsx|mjs|astro|vue|svelte|html|jsonld)$/.test(f)) continue;
     const text = fs.readFileSync(path.join(rootDir, f), "utf8");
-    return text.includes("modelContext") && text.includes("registerTool");
-  });
+    if (/\.(ts|tsx|js|jsx|mjs)$/.test(f) && text.includes("modelContext") && text.includes("registerTool")) {
+      webMcpFiles.push(f);
+    }
+    if (
+      text.includes("application/ld+json") ||
+      text.includes("https://schema.org") ||
+      text.includes("http://schema.org") ||
+      f.endsWith(".jsonld")
+    ) {
+      jsonLdFiles.push(f);
+    }
+  }
 
   return {
     root: rootDir,
@@ -232,6 +263,7 @@ function buildRepoManifest(rootDir) {
     wellKnownFiles,
     middlewareFiles,
     webMcpFiles,
+    jsonLdFiles,
     hasLlmsTxt:
       fileSet.has("public/llms.txt") ||
       fileSet.has("llms.txt") ||
@@ -945,18 +977,21 @@ function validateAdagentsJson(doc, sourceLabel) {
 }
 
 /**
- * Validate /.well-known/ai-catalog.json (SEP-2127 domain discovery).
+ * Validate /.well-known/ard.json (ARD v1.0 / Chrome Lighthouse ard-schema)
+ * or /.well-known/ai-catalog.json (SEP-2127).
  * @param {unknown} doc
  * @param {string} sourceLabel
+ * @param {boolean} isArd
  */
-function validateAiCatalogJson(doc, sourceLabel) {
+function validateArdOrAiCatalogJson(doc, sourceLabel, isArd = false) {
   const findings = [];
+  const checkTag = isArd ? "ard-manifest" : "sep2127-ai-catalog";
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
     findings.push({
       severity: "error",
-      check: "sep2127-ai-catalog",
+      check: checkTag,
       location: sourceLabel,
-      message: "ai-catalog.json must be a JSON object.",
+      message: `${isArd ? "ard.json" : "ai-catalog.json"} must be a JSON object.`,
     });
     return findings;
   }
@@ -964,35 +999,62 @@ function validateAiCatalogJson(doc, sourceLabel) {
   if (obj.specVersion !== "1.0") {
     findings.push({
       severity: "error",
-      check: "sep2127-ai-catalog",
+      check: checkTag,
       location: sourceLabel,
-      message: `ai-catalog.json requires 'specVersion': "1.0" (got ${JSON.stringify(obj.specVersion)}).`,
+      message: `${isArd ? "ard.json" : "ai-catalog.json"} requires 'specVersion': "1.0" (got ${JSON.stringify(obj.specVersion)}).`,
     });
   }
   if (!Array.isArray(obj.entries)) {
     findings.push({
       severity: "error",
-      check: "sep2127-ai-catalog",
+      check: checkTag,
       location: sourceLabel,
-      message: "ai-catalog.json requires an 'entries' array.",
+      message: `${isArd ? "ard.json" : "ai-catalog.json"} requires an 'entries' array.`,
     });
   } else {
     for (let i = 0; i < obj.entries.length; i += 1) {
       const entry = obj.entries[i];
-      if (
-        !entry ||
-        typeof entry !== "object" ||
-        typeof entry.identifier !== "string" ||
-        typeof entry.type !== "string" ||
-        typeof entry.url !== "string" ||
-        !entry.url.startsWith("https://")
-      ) {
+      if (!entry || typeof entry !== "object") {
         findings.push({
           severity: "error",
-          check: "sep2127-ai-catalog",
+          check: checkTag,
+          location: `${sourceLabel}#entries[${i}]`,
+          message: "Entry must be a JSON object.",
+        });
+        continue;
+      }
+      if (typeof entry.identifier !== "string" || !ARD_URN_RE.test(entry.identifier)) {
+        findings.push({
+          severity: "error",
+          check: "ard-urn-identifier",
+          location: `${sourceLabel}#entries[${i}]`,
+          message: `Entry identifier ${JSON.stringify(entry.identifier)} must match 'urn:air:<publisher>:<namespace>:<name>'.`,
+        });
+      }
+      if (isArd && (typeof entry.displayName !== "string" || entry.displayName.trim() === "")) {
+        findings.push({
+          severity: "error",
+          check: checkTag,
+          location: `${sourceLabel}#entries[${i}]`,
+          message: "ARD entries require a non-empty 'displayName' string (Chrome Lighthouse ard-schema).",
+        });
+      }
+      if (entry.type === "application/mcp-server+json") {
+        findings.push({
+          severity: "warning",
+          check: "ard-deprecated-media-type",
           location: `${sourceLabel}#entries[${i}]`,
           message:
-            "Each ai-catalog.json entry requires 'identifier', 'type' (e.g. 'application/mcp-server-card+json'), and an https:// 'url'.",
+            "Media type 'application/mcp-server+json' was deprecated by ADR-0008; use 'application/mcp-server-card+json'.",
+        });
+      }
+      if (typeof entry.type !== "string" || typeof entry.url !== "string" || !entry.url.startsWith("https://")) {
+        findings.push({
+          severity: "error",
+          check: checkTag,
+          location: `${sourceLabel}#entries[${i}]`,
+          message:
+            "Each entry requires 'type' (e.g. 'application/mcp-server-card+json') and an https:// 'url'.",
         });
       }
     }
@@ -1505,6 +1567,222 @@ function validateSecurityTxt(text, sourceLabel) {
 }
 
 /**
+ * Extract primary brand name and canonical host from a Variant 5 brand.json object.
+ * @param {unknown} brandDoc
+ */
+function extractBrandIdentity(brandDoc) {
+  if (!brandDoc || typeof brandDoc !== "object" || Array.isArray(brandDoc)) return null;
+  const obj = /** @type {Record<string, unknown>} */ (brandDoc);
+  let primaryName = null;
+  if (Array.isArray(obj.names) && obj.names.length > 0 && obj.names[0] && typeof obj.names[0] === "object") {
+    const vals = Object.values(obj.names[0]);
+    if (typeof vals[0] === "string") primaryName = vals[0].trim();
+  }
+  let host = null;
+  if (typeof obj.url === "string") {
+    try {
+      host = new URL(obj.url).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      host = null;
+    }
+  }
+  return primaryName || host ? { primaryName, host } : null;
+}
+
+/**
+ * Validate a parsed Schema.org JSON-LD payload and check parity against brand.json.
+ * @param {unknown} doc
+ * @param {string} sourceLabel
+ * @param {unknown} brandDoc
+ */
+function validateJsonLdPayload(doc, sourceLabel, brandDoc = null) {
+  const findings = [];
+  const brandIdentity = extractBrandIdentity(brandDoc);
+  const rootItems = Array.isArray(doc) ? doc : [doc];
+
+  for (const item of rootItems) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      findings.push({
+        severity: "error",
+        check: "json-ld-structure",
+        location: sourceLabel,
+        message: "JSON-LD block must be a JSON object or array of objects.",
+      });
+      continue;
+    }
+    const rootObj = /** @type {Record<string, unknown>} */ (item);
+    const ctx = rootObj["@context"];
+    const ctxStr = typeof ctx === "string" ? ctx : JSON.stringify(ctx ?? "");
+    if (ctxStr.includes("http://schema.org")) {
+      findings.push({
+        severity: "warning",
+        check: "json-ld-http-context",
+        location: sourceLabel,
+        message: 'JSON-LD uses legacy "http://schema.org" @context; use "https://schema.org".',
+      });
+    } else if (!ctxStr.includes("schema.org")) {
+      findings.push({
+        severity: "error",
+        check: "json-ld-context",
+        location: sourceLabel,
+        message: 'JSON-LD root is missing "@context": "https://schema.org".',
+      });
+    }
+
+    const nodes = Array.isArray(rootObj["@graph"]) ? rootObj["@graph"] : [rootObj];
+    for (let i = 0; i < nodes.length; i += 1) {
+      const node = nodes[i];
+      if (!node || typeof node !== "object" || Array.isArray(node)) continue;
+      const n = /** @type {Record<string, unknown>} */ (node);
+      const rawType = n["@type"];
+      const types = Array.isArray(rawType)
+        ? rawType.filter((t) => typeof t === "string")
+        : typeof rawType === "string"
+          ? [rawType]
+          : [];
+
+      if (types.length === 0 && !("@id" in n && Object.keys(n).length === 1)) {
+        findings.push({
+          severity: "error",
+          check: "json-ld-missing-type",
+          location: `${sourceLabel}#node[${i}]`,
+          message: "JSON-LD entity node is missing '@type'.",
+        });
+        continue;
+      }
+
+      for (const t of types) {
+        if (RETIRED_GOOGLE_RICH_RESULT_TYPES.has(t)) {
+          findings.push({
+            severity: "info",
+            check: "json-ld-retired-rich-result",
+            location: `${sourceLabel} (${t})`,
+            message: `Schema.org "${t}" is retired from Google SERP rich results (2024-2026); keep only if intentional for LLM/NLWeb semantic grounding.`,
+          });
+        }
+      }
+
+      if (brandIdentity && types.some((t) => ORG_LIKE_TYPES.has(t))) {
+        if (
+          brandIdentity.primaryName &&
+          typeof n.name === "string" &&
+          n.name.trim() !== "" &&
+          n.name.trim().toLowerCase() !== brandIdentity.primaryName.toLowerCase()
+        ) {
+          findings.push({
+            severity: "warning",
+            check: "json-ld-brand-parity",
+            location: sourceLabel,
+            message: `JSON-LD Organization name "${n.name}" differs from /.well-known/brand.json name "${brandIdentity.primaryName}".`,
+          });
+        }
+        if (brandIdentity.host && typeof n.url === "string") {
+          try {
+            const orgHost = new URL(n.url).hostname.replace(/^www\./, "").toLowerCase();
+            if (orgHost !== brandIdentity.host) {
+              findings.push({
+                severity: "warning",
+                check: "json-ld-brand-parity",
+                location: sourceLabel,
+                message: `JSON-LD Organization url host "${orgHost}" differs from /.well-known/brand.json url host "${brandIdentity.host}".`,
+              });
+            }
+          } catch {
+            // Ignore relative URLs here
+          }
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+/**
+ * Audit static repository files for JSON-LD presence, \u003c XSS escaping, and schema hygiene.
+ * @param {string} rootDir
+ * @param {readonly string[]} jsonLdFiles
+ * @param {string} framework
+ */
+function auditStaticJsonLdFiles(rootDir, jsonLdFiles, framework, localBrandDoc = null) {
+  const findings = [];
+  if (jsonLdFiles.length === 0) {
+    if (framework !== "static-or-custom") {
+      findings.push({
+        severity: "warning",
+        check: "json-ld-presence",
+        location: rootDir,
+        message:
+          "No Schema.org JSON-LD ('application/ld+json') detected in repository. Add SSR @graph structured data for entity grounding.",
+      });
+    }
+    return findings;
+  }
+
+  const retiredNoted = new Set();
+  for (const rel of jsonLdFiles) {
+    const full = path.join(rootDir, rel);
+    const text = fs.readFileSync(full, "utf8");
+
+    if (rel.endsWith(".jsonld")) {
+      try {
+        findings.push(...validateJsonLdPayload(JSON.parse(text), rel, localBrandDoc));
+      } catch (err) {
+        findings.push({
+          severity: "error",
+          check: "json-ld-syntax",
+          location: rel,
+          message: `Invalid JSON in ${rel}: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      continue;
+    }
+
+    if (text.includes("http://schema.org")) {
+      findings.push({
+        severity: "warning",
+        check: "json-ld-http-context",
+        location: rel,
+        message: 'Found legacy "http://schema.org" in JSON-LD builder; use "https://schema.org".',
+      });
+    }
+
+    if (text.includes("application/ld+json")) {
+      const dangerousExprs = [
+        ...text.matchAll(/dangerouslySetInnerHTML=\{\{\s*__html:\s*([\s\S]*?)\s*\}\}/g),
+      ].map((m) => m[1]);
+      if (
+        dangerousExprs.some(
+          (expr) => expr.includes("JSON.stringify") && !expr.includes(".replace(")
+        )
+      ) {
+        findings.push({
+          severity: "warning",
+          check: "json-ld-xss-escape",
+          location: rel,
+          message:
+            'Unescaped JSON.stringify(...) inside <script type="application/ld+json"> dangerouslySetInnerHTML. Append .replace(/</g, "\\\\u003c") to prevent </script> XSS breakout.',
+        });
+      }
+    }
+
+    for (const retired of RETIRED_GOOGLE_RICH_RESULT_TYPES) {
+      const re = new RegExp(`["']@type["']\\s*:\\s*["']${retired}["']`);
+      const key = `${rel}:${retired}`;
+      if (re.test(text) && !retiredNoted.has(key)) {
+        retiredNoted.add(key);
+        findings.push({
+          severity: "info",
+          check: "json-ld-retired-rich-result",
+          location: rel,
+          message: `Schema.org "${retired}" is retired from Google SERP rich results; keep only if intentional for LLM/NLWeb semantic grounding.`,
+        });
+      }
+    }
+  }
+  return findings;
+}
+
+/**
  * Validate IETF aipref Content-Usage syntax if present.
  * @param {string} text
  * @param {string} sourceLabel
@@ -1616,7 +1894,33 @@ function auditLocalRepo(rootDir) {
     }
   }
 
-  // 5. AdCP & RFC 8615 well-known files check
+  // 5. JSON-LD static entity graph & XSS serialization check
+  let localBrandDoc = null;
+  const staticBrandPath = path.join(rootDir, "public/.well-known/brand.json");
+  if (fs.existsSync(staticBrandPath)) {
+    try {
+      localBrandDoc = JSON.parse(fs.readFileSync(staticBrandPath, "utf8"));
+    } catch {
+      localBrandDoc = null;
+    }
+  }
+  findings.push(
+    ...auditStaticJsonLdFiles(rootDir, manifest.jsonLdFiles, manifest.framework, localBrandDoc)
+  );
+
+  // 6. AdCP & RFC 8615 well-known files check
+  const hasArdFile = fs.existsSync(path.join(rootDir, "public/.well-known/ard.json"));
+  const hasAiCatalogFile = fs.existsSync(path.join(rootDir, "public/.well-known/ai-catalog.json"));
+  if (hasAiCatalogFile && !hasArdFile) {
+    findings.push({
+      severity: "info",
+      check: "ard-lighthouse-legacy",
+      location: "public/.well-known/ai-catalog.json",
+      message:
+        "Chrome Lighthouse 13.5+ ard-schema treats /.well-known/ai-catalog.json alone as legacyWellKnown. Also serve or alias /.well-known/ard.json.",
+    });
+  }
+
   const wellKnownJsonValidators = [
     {
       rel: "public/.well-known/brand.json",
@@ -1627,8 +1931,12 @@ function auditLocalRepo(rootDir) {
       fn: (doc) => validateAdagentsJson(doc, "public/.well-known/adagents.json"),
     },
     {
+      rel: "public/.well-known/ard.json",
+      fn: (doc) => validateArdOrAiCatalogJson(doc, "public/.well-known/ard.json", true),
+    },
+    {
       rel: "public/.well-known/ai-catalog.json",
-      fn: (doc) => validateAiCatalogJson(doc, "public/.well-known/ai-catalog.json"),
+      fn: (doc) => validateArdOrAiCatalogJson(doc, "public/.well-known/ai-catalog.json", false),
     },
     {
       rel: "public/.well-known/mcp/server-card.json",
@@ -1806,6 +2114,7 @@ async function auditLiveUrl(baseUrl) {
     llmsRes,
     brandRes,
     adagentsRes,
+    ardRes,
     aiCatalogRes,
     mcpRes,
     agentCardRes,
@@ -1820,6 +2129,7 @@ async function auditLiveUrl(baseUrl) {
     probe("/llms.txt"),
     probe("/.well-known/brand.json", {}, true),
     probe("/.well-known/adagents.json", {}, true),
+    probe("/.well-known/ard.json"),
     probe("/.well-known/ai-catalog.json"),
     probe("/.well-known/mcp.json"),
     probe("/.well-known/agent-card.json"),
@@ -2014,11 +2324,70 @@ async function auditLiveUrl(baseUrl) {
     "adcp"
   );
   checkLiveWellKnown(
-    "/.well-known/ai-catalog.json",
-    aiCatalogRes,
-    (d, _r, loc) => validateAiCatalogJson(d, loc),
+    "/.well-known/ard.json",
+    ardRes,
+    (d, _r, loc) => validateArdOrAiCatalogJson(d, loc, true),
     "application/ai-catalog+json"
   );
+  checkLiveWellKnown(
+    "/.well-known/ai-catalog.json",
+    aiCatalogRes,
+    (d, _r, loc) => validateArdOrAiCatalogJson(d, loc, false),
+    "application/ai-catalog+json"
+  );
+  if (aiCatalogRes.ok && !ardRes.ok) {
+    findings.push({
+      severity: "info",
+      check: "live-ard-lighthouse-legacy",
+      location: `${origin}/.well-known/ai-catalog.json`,
+      message:
+        "Origin serves /.well-known/ai-catalog.json without /.well-known/ard.json (flagged as legacyWellKnown by Chrome Lighthouse 13.5+ ard-schema).",
+    });
+  }
+
+  // Extract and validate SSR <script type="application/ld+json"> blocks on root HTML
+  if (homeRes.ok && homeRes.contentType.includes("text/html")) {
+    let liveBrandDoc = null;
+    if (brandRes.ok && !brandRes.contentType.includes("text/html")) {
+      try {
+        liveBrandDoc = JSON.parse(brandRes.body);
+      } catch {
+        liveBrandDoc = null;
+      }
+    }
+    const ldBlocks = [
+      ...homeRes.body.matchAll(
+        /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+      ),
+    ].map((m) => m[1].trim());
+    probed["/ (SSR JSON-LD blocks)"] = { status: homeRes.status, contentType: `${ldBlocks.length} block(s)` };
+
+    if (ldBlocks.length === 0) {
+      findings.push({
+        severity: "warning",
+        check: "live-json-ld-presence",
+        location: `${origin}/`,
+        message:
+          'Root HTML contains zero server-rendered <script type="application/ld+json"> structured data blocks.',
+      });
+    } else {
+      for (let i = 0; i < ldBlocks.length; i += 1) {
+        try {
+          const parsedLd = JSON.parse(ldBlocks[i]);
+          findings.push(
+            ...validateJsonLdPayload(parsedLd, `${origin}/#json-ld[${i}]`, liveBrandDoc)
+          );
+        } catch (err) {
+          findings.push({
+            severity: "error",
+            check: "live-json-ld-syntax",
+            location: `${origin}/#json-ld[${i}]`,
+            message: `Invalid JSON inside <script type="application/ld+json">: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+    }
+  }
   checkLiveWellKnown("/.well-known/mcp.json", mcpRes, (d, r, loc) =>
     validateMcpServerCard(d, r, loc, true)
   );
@@ -2158,7 +2527,7 @@ async function main() {
         `Local Repo Audit: ${report.local.manifest.root} (${report.local.manifest.framework})`
       );
       console.log(
-        `  Routes: ${report.local.manifest.appRoutes.length} | Content files: ${report.local.manifest.contentFiles.length} | .md twins: ${report.local.manifest.markdownTwins.length} | .well-known files: ${report.local.manifest.wellKnownFiles.length}`
+        `  Routes: ${report.local.manifest.appRoutes.length} | Content files: ${report.local.manifest.contentFiles.length} | .md twins: ${report.local.manifest.markdownTwins.length} | JSON-LD files: ${report.local.manifest.jsonLdFiles.length} | .well-known files: ${report.local.manifest.wellKnownFiles.length}`
       );
       if (report.local.llmsAst) {
         console.log(
@@ -2177,7 +2546,7 @@ async function main() {
     console.log("");
     if (allFindings.length === 0) {
       console.log(
-        "PASS: Zero findings across llms.txt v2, AdCP v3.2.8, RFC 8615, and WebMCP checks."
+        "PASS: Zero findings across llms.txt v2, JSON-LD, AdCP v3.2.8, RFC 8615/ARD, and WebMCP checks."
       );
     } else {
       for (const f of allFindings) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## v2026.11.12 (2026-11-12)
+
+- Upgraded `agentic-web` to `2.1.0` with **Layer E: Structured Entity Graph (`JSON-LD 1.1` / `Schema.org`)** and **Chrome Lighthouse 13.5+ Agentic Resource Discovery (`/.well-known/ard.json`)**:
+  - **JSON-LD 1.1 & `Schema.org` Entity Graph (`references/json-ld-entity-graph.md`, `templates/json-ld-graph.json`)**: Added SSR-only `<script type="application/ld+json">` rules, HTTPS `"@context": "https://schema.org"`, single `@graph` composition with stable fragment `@id` URIs (`#organization`, `#website`, `#person`), zero-runtime `schema-dts@2.1.0` typing (`WithContext`, `Graph`, `MergeLeafTypes`, `*Leaf` interfaces), mandatory `.replace(/</g, "\\u003c")` XSS escaping, Microsoft `NLWeb` direct ingestion guidance, and Google Search Central retired Rich Results guardrails (`HowTo`, general commercial `FAQPage`, `ClaimReview`, `CourseInfo`, `EstimatedSalary`, `LearningVideo`, `SpecialAnnouncement`, `VehicleListing`, `PracticeProblem`).
+  - **Cross-Manifest Identity Parity (`Organization` <-> `/.well-known/brand.json`)**: Added automated drift detection in `scripts/agentic-web-audit.mjs` verifying that Schema.org `Organization` (`name`, `url`, `logo`, `description`) stays aligned with AdCP v3.2+ `/.well-known/brand.json` across both static workspace files and live SSR HTML `--url` probes.
+  - **Agentic Resource Discovery (`/.well-known/ard.json`, `ards-project/ard-spec`)**: Added `templates/ard-manifest.json`, updated `templates/ai-catalog.json` (`urn:air:` identifiers + `displayName`), documented ADR-0010 loose coupling between ARD and MCP `SEP-2127` `ai-catalog.json` in `references/rfc8615-well-known.md`, and implemented Lighthouse `ard-schema` validation (`specVersion: "1.0"`, `urn:air:<domain>:<ns>:<name>`, standard media types, and `application/mcp-server+json` deprecation checks) in `scripts/agentic-web-audit.mjs`.
+
 ## v2026.11.11-2 (2026-11-11)
 
 - Upgraded `agentic-web` to `2.0.0` after full primary-source audit of every specification and official TypeScript/Python SDK:

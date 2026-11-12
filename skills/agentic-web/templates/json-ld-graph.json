@@ -1,0 +1,52 @@
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": ["Organization", "ProfessionalService"],
+      "@id": "https://acme.com/#organization",
+      "name": "Acme Corp",
+      "url": "https://acme.com",
+      "logo": "https://acme.com/logo.svg",
+      "description": "Concise factual description matching /.well-known/brand.json.",
+      "sameAs": [
+        "https://github.com/acme",
+        "https://www.linkedin.com/company/acme"
+      ],
+      "knowsAbout": [
+        "Cloud Infrastructure",
+        "Site Reliability Engineering"
+      ]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://acme.com/#website",
+      "url": "https://acme.com",
+      "name": "Acme Corp",
+      "publisher": {
+        "@id": "https://acme.com/#organization"
+      }
+    },
+    {
+      "@type": "Person",
+      "@id": "https://acme.com/#person",
+      "name": "Jane Doe",
+      "url": "https://acme.com",
+      "jobTitle": "Principal Engineer",
+      "worksFor": {
+        "@id": "https://acme.com/#organization"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://acme.com/#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://acme.com"
+        }
+      ]
+    }
+  ]
+}
